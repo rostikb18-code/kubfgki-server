@@ -1,0 +1,1277 @@
+ROSTIK TOUCH BOT v29 — FIXED FULL SOURCE
+Includes fixes for Accessibility gestures, foreground-service startup,
+POST_NOTIFICATIONS runtime permission, and MediaProjection foreground-service type.
+
+
+==============================================================================
+FILE: .github/workflows/build.yml
+==============================================================================
+name: Build Rostik Touch Bot v29
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Build debug APK
+        run: gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RostikTouchBot-v29-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+==============================================================================
+FILE: README.md
+==============================================================================
+# ROSTIK TOUCH BOT v29
+
+v29 is a vision-driven Android automation project for live testing with Brawl Stars.
+
+## Main changes in v29
+
+- Adaptive player/team marker detection: green/cyan/blue variants.
+- Player identity uses spatial prior, bright indicator above the marker and temporal tracking.
+- Enemy detection uses red marker geometry and temporal continuity.
+- Ball detection uses neutral white/black contrast + compactness + temporal continuity.
+- Player prediction for short occlusions.
+- Aim jitter removed.
+- RESULT/REWARD OCR cadence: 120 ms.
+- Loading -> Playing can proceed from a confirmed player without requiring a high scene confidence.
+- Super requires a ready-looking button, an enemy opportunity and 20 s minimum match time.
+- Simple forward pass: if a detected ally is advanced and the ball is close, aim toward the ally.
+- Simple perpendicular dodge when an enemy is very close.
+- RewardHandler only taps OCR-confirmed aliases and requires two stable observations; no generic center taps for rewards.
+- Reward actions are bounded to 8 per cycle.
+- Fresh OCR is discarded after 2 seconds.
+- Queue cups require three independent OCR timestamps.
+- STOP/unknown states do not create random actions.
+
+## Important
+
+This project is not a guarantee of compatibility with every Brawl Stars update, device or skin.
+The visual detector is classical CV; it is not a trained object detector.
+Real-device testing is required.
+
+## Android setup
+
+1. Build with Android Studio using JDK 17.
+2. Enable the Accessibility service for the app.
+3. Grant overlay permission if the overlay is used.
+4. Start screen capture and accept Android's MediaProjection confirmation.
+5. Open Brawl Stars.
+6. Start with one brawler and one target.
+7. Watch the status line for player/enemy/ball coordinates before increasing the queue.
+
+The app intentionally avoids random reward taps. If a popup is not recognized, stop and inspect the screen rather than clicking blindly.
+
+==============================================================================
+FILE: app/build.gradle.kts
+==============================================================================
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "com.rostik.touchbot"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.rostik.touchbot"
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 29
+        versionName = "29.0.0"
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions { jvmTarget = "17" }
+}
+
+dependencies {
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.activity:activity-ktx:1.10.1")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+}
+
+==============================================================================
+FILE: app/proguard-rules.pro
+==============================================================================
+# Rostik Touch Bot 29.0
+
+==============================================================================
+FILE: app/src/main/AndroidManifest.xml
+==============================================================================
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
+    <queries>
+        <package android:name="com.supercell.brawlstars"/>
+    </queries>
+
+    <application
+        android:theme="@style/AppTheme"
+        android:label="@string/app_name"
+        android:allowBackup="false"
+        android:supportsRtl="true">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".BotAccessibilityService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config"/>
+        </service>
+
+        <service
+            android:name=".ScreenCaptureService"
+            android:foregroundServiceType="mediaProjection"
+            android:exported="false"/>
+    </application>
+</manifest>
+
+==============================================================================
+FILE: app/src/main/java/com/rostik/touchbot/BotAccessibilityService.kt
+==============================================================================
+package com.rostik.touchbot
+
+import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
+import android.graphics.Path
+import android.view.accessibility.AccessibilityEvent
+
+class BotAccessibilityService : AccessibilityService() {
+    companion object { @Volatile var instance: BotAccessibilityService? = null }
+
+    override fun onServiceConnected(){
+        super.onServiceConnected()
+        instance=this
+    }
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onInterrupt(){}
+
+    override fun onDestroy(){
+        if(instance===this) instance=null
+        super.onDestroy()
+    }
+
+    fun dispatch(frame:ControlFrame, left:Point, right:Point, duration:Long=80L):Boolean {
+        val builder=GestureDescription.Builder()
+        val lp=Path().apply{moveTo(left.x*resources.displayMetrics.widthPixels,left.y*resources.displayMetrics.heightPixels);lineTo(
+            (left.x+frame.moveX*.12f).coerceIn(0f,1f)*resources.displayMetrics.widthPixels,
+            (left.y+frame.moveY*.12f).coerceIn(0f,1f)*resources.displayMetrics.heightPixels)}
+        builder.addStroke(GestureDescription.StrokeDescription(lp,0,duration))
+        val rp=Path().apply{moveTo(right.x*resources.displayMetrics.widthPixels,right.y*resources.displayMetrics.heightPixels);lineTo(
+            (right.x+frame.aimX*.14f).coerceIn(0f,1f)*resources.displayMetrics.widthPixels,
+            (right.y+frame.aimY*.14f).coerceIn(0f,1f)*resources.displayMetrics.heightPixels)}
+        if(frame.fire || kotlin.math.abs(frame.aimX)+kotlin.math.abs(frame.aimY)>.05f)
+            builder.addStroke(GestureDescription.StrokeDescription(rp,0,duration))
+        if(frame.useSuper && frame.superPoint!=null){
+            val s=Path().apply{
+                moveTo(frame.superPoint.x*resources.displayMetrics.widthPixels,frame.superPoint.y*resources.displayMetrics.heightPixels)
+                lineTo(frame.superPoint.x*resources.displayMetrics.widthPixels,frame.superPoint.y*resources.displayMetrics.heightPixels)
+            }
+            builder.addStroke(GestureDescription.StrokeDescription(s,0,55L))
+        }
+        return dispatchGesture(builder.build(),null,null)
+    }
+
+    fun tap(p:Point):Boolean{
+        val x=p.x*resources.displayMetrics.widthPixels
+        val y=p.y*resources.displayMetrics.heightPixels
+        val path=Path().apply{moveTo(x,y);lineTo(x,y)}
+        return dispatchGesture(GestureDescription.Builder().addStroke(
+            GestureDescription.StrokeDescription(path,0,55L)).build(),null,null)
+    }
+}
+
+==============================================================================
+FILE: app/src/main/java/com/rostik/touchbot/CupReader.kt
+==============================================================================
+package com.rostik.touchbot
+
+class CupReader {
+    fun read(lines: List<OcrLine>, now: Long): Int? {
+        val fresh = lines.filter { now - it.capturedAt <= 2000L }
+        val candidates = fresh.flatMap { line ->
+            Regex("""(?<!\d)(\d{2,4})(?!\d)""").findAll(line.text)
+                .mapNotNull { it.groupValues[1].toIntOrNull() }
+                .filter { it in 0..10000 }
+                .toList()
+        }
+        return candidates.firstOrNull()
+    }
+}
+
+==============================================================================
+FILE: app/src/main/java/com/rostik/touchbot/CupTracker.kt
+==============================================================================
+package com.rostik.touchbot
+
+class CupTracker {
+    private var lastValue: Int? = null
+    private var confirmations = 0
+    private var lastTimestamp = 0L
+
+    fun offer(value: Int?, timestamp: Long): Int? {
+        if (value == null || timestamp <= lastTimestamp) return null
+        lastTimestamp = timestamp
+        if (lastValue == value) confirmations++ else {
+            lastValue = value
+            confirmations = 1
+        }
+        return if (confirmations >= 3) value else null
+    }
+
+    fun reset() {
+        lastValue = null
+        confirmations = 0
+        lastTimestamp = 0L
+    }
+}
+
+==============================================================================
+FILE: app/src/main/java/com/rostik/touchbot/MainActivity.kt
+==============================================================================
+package com.rostik.touchbot
+
+import android.app.*
+import android.Manifest
+import android.content.*
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.media.projection.MediaProjectionManager
+import android.net.Uri
+import android.os.Bundle
+import android.provider.Settings
+import android.widget.*
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.ComponentActivity
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.*
+import java.util.concurrent.atomic.AtomicReference
+
+class MainActivity:ComponentActivity(){
+    private val queue=QueueEngine()
+    private val supervisor=MatchSupervisor(queue)
+    private val latestFrame=AtomicReference<Bitmap?>(null)
+    private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Default)
+    private lateinit var status:TextView
+
+    private val captureLauncher=registerForActivityResult(ActivityResultContracts.StartActivityForResult()){r->
+        if(r.resultCode==RESULT_OK && r.data!=null){
+            val captureIntent=Intent(this,ScreenCaptureService::class.java).apply{
+                putExtra(ScreenCaptureService.EXTRA_RESULT_CODE,r.resultCode)
+                putExtra(ScreenCaptureService.EXTRA_RESULT_DATA,r.data)
+            }
+            ContextCompat.startForegroundService(this,captureIntent)
+            ScreenCaptureService.onBitmap={bmp->
+                val old=latestFrame.getAndSet(bmp)
+                if(old!=null && !old.isRecycled) try{old.recycle()}catch(_:Throwable){}
+                supervisor.submitLatestFrame(bmp)
+            }
+        }
+    }
+
+    override fun onCreate(savedInstanceState:Bundle?){
+        super.onCreate(savedInstanceState)
+        requestNotificationPermissionIfNeeded()
+        buildUi()
+        scope.launch{
+            while(isActive){
+                delay(500)
+                val s=supervisor.status()
+                withContext(Dispatchers.Main){status.text=s}
+            }
+        }
+    }
+
+    private fun requestNotificationPermissionIfNeeded(){
+        if(android.os.Build.VERSION.SDK_INT>=33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS),1001)
+        }
+    }
+
+    private fun buildUi(){
+        val root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;padding(20)}
+        root.addView(TextView(this).apply{
+            text="ROSTIK TOUCH BOT 29.0 • REALTIME"
+            textSize=22f
+        })
+        status=TextView(this).apply{text="Готов";setPadding(0,16,0,16)}
+        root.addView(status)
+        val current=EditText(this).apply{hint="Текущие кубки";inputType=2;setText("500")}
+        val target=EditText(this).apply{hint="Цель";inputType=2;setText("700")}
+        root.addView(current);root.addView(target)
+        root.addView(Button(this).apply{
+            text="ДОБАВИТЬ COLT В ОЧЕРЕДЬ"
+            setOnClickListener{
+                queue.replace(listOf(QueueItem("colt",current.text.toString().toIntOrNull()?:500,target.text.toString().toIntOrNull()?:700)))
+                supervisor.start()
+            }
+        })
+        root.addView(Button(this).apply{
+            text="РАЗРЕШИТЬ OVERLAY"
+            setOnClickListener{startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))}
+        })
+        root.addView(Button(this).apply{
+            text="ВКЛЮЧИТЬ CAPTURE"
+            setOnClickListener{
+                val pm=getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                captureLauncher.launch(pm.createScreenCaptureIntent())
+            }
+        })
+        root.addView(Button(this).apply{
+            text="ОТКРЫТЬ BRAWL STARS"
+            setOnClickListener{packageManager.getLaunchIntentForPackage("com.supercell.brawlstars")?.let{startActivity(it)}}
+        })
+        root.addView(Button(this).apply{
+            text="STOP"
+            setOnClickListener{supervisor.stop()}
+        })
+        setContentView(root)
+    }
+
+    override fun onDestroy(){
+        supervisor.close()
+        ScreenCaptureService.onBitmap=null
+        latestFrame.getAndSet(null)?.let{if(!it.isRecycled)try{it.recycle()}catch(_:Throwable){}}
+        scope.cancel()
+        super.onDestroy()
+    }
+}
+
+==============================================================================
+FILE: app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
+==============================================================================
+package com.rostik.touchbot
+
+import android.util.Log
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicLong
+
+class MatchSupervisor(private val queue:QueueEngine):AutoCloseable{
+    private val vision=MatchVision()
+    private val ocr=OcrEngine()
+    private val cups=CupReader()
+    private val cupTracker=CupTracker()
+    private val controller=ReactiveBrawlBallController()
+    private val reward=RewardHandler()
+
+    private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Default)
+    private val frameChannel=Channel<BitmapRef>(Channel.CONFLATED)
+    private val latestScene=AtomicReference<MatchScene?>(null)
+    private val latestOcr=AtomicReference<List<OcrLine>>(emptyList())
+    private val latestOcrAt=AtomicLong(0L)
+
+    @Volatile private var state=RunState.IDLE
+    @Volatile private var running=false
+    private var lastOcrAt=0L
+    private var matchStartedAt=0L
+    private var resultSince=0L
+    private var rewardSince=0L
+    private var actionBusyUntil=0L
+    private var workerStarted=false
+
+    data class BitmapRef(val bitmap:android.graphics.Bitmap)
+
+    fun start(){
+        if(running)return
+        running=true
+        state=RunState.PREPARE
+        lastOcrAt=0L
+        matchStartedAt=0L
+        resultSince=0L
+        rewardSince=0L
+        actionBusyUntil=0L
+        cupTracker.reset()
+        reward.reset()
+        startWorkerIfNeeded()
+    }
+    fun stop(){
+        running=false
+        state=RunState.IDLE
+        latestScene.set(null)
+        latestOcr.set(emptyList())
+        latestOcrAt.set(0L)
+        while(true){
+            val item=frameChannel.tryReceive().getOrNull() ?: break
+            safeRecycle(item.bitmap)
+        }
+    }
+    fun submitLatestFrame(bitmap:android.graphics.Bitmap){
+        if(!running){safeRecycle(bitmap);return}
+        val old=frameChannel.trySend(BitmapRef(bitmap))
+        if(!old.isSuccess){safeRecycle(bitmap)}
+    }
+
+    private fun startWorkerIfNeeded(){
+        if(workerStarted)return
+        workerStarted=true
+        scope.launch{
+            for(ref in frameChannel){
+                if(!running){safeRecycle(ref.bitmap);continue}
+                try{
+                    processFrame(ref.bitmap)
+                }catch(t:Throwable){Log.w("Supervisor","frame failed",t)}
+                finally{safeRecycle(ref.bitmap)}
+            }
+        }
+    }
+
+    private suspend fun processFrame(bitmap:android.graphics.Bitmap){
+        val now=System.currentTimeMillis()
+        val scene=vision.detect(bitmap,now)
+        latestScene.set(scene)
+
+        if(state==RunState.PLAYING || state==RunState.LOADING || state==RunState.RESULT || state==RunState.REWARD){
+            val needOcr=when(state){
+                RunState.PLAYING -> now-lastOcrAt>=700L
+                RunState.RESULT,RunState.REWARD -> now-lastOcrAt>=120L
+                else -> now-lastOcrAt>=450L
+            }
+            if(needOcr){
+                lastOcrAt=now
+                val lines = try {
+                    ocr.read(bitmap)
+                } catch (t: Throwable) {
+                    Log.w("OCR", "failed", t)
+                    emptyList()
+                }
+                latestOcr.set(lines); latestOcrAt.set(now)
+            }
+        }
+
+        step(scene,now)
+    }
+
+    private fun step(scene:MatchScene,now:Long){
+        when(state){
+            RunState.PREPARE -> {
+                if(queue.current()!=null) state=RunState.SELECT_BRAWLER
+            }
+            RunState.SELECT_BRAWLER -> {
+                // The actual brawler-card detector can be extended with assets.
+                // For live testing the selected queue item is kept as the requested brawler.
+                state=RunState.SELECT_MODE
+            }
+            RunState.SELECT_MODE -> state=RunState.SELECT_MAP
+            RunState.SELECT_MAP -> state=RunState.PRESS_PLAY
+            RunState.PRESS_PLAY -> {
+                val service=BotAccessibilityService.instance
+                if(service!=null && now>=actionBusyUntil){
+                    // Conservative fallback: only use a calibrated lower-center button.
+                    service.tap(Point(.50f,.88f))
+                    actionBusyUntil=now+1200L
+                    state=RunState.LOADING
+                }
+            }
+            RunState.LOADING -> if(scene.player!=null){
+                state=RunState.PLAYING
+                matchStartedAt=now
+                resultSince=0L
+            }
+            RunState.PLAYING -> {
+                if(scene.player!=null){
+                    val elapsed=now-matchStartedAt
+                    val cf=controller.next(scene,now,elapsed)
+                    val service=BotAccessibilityService.instance
+                    if(service!=null && now>=actionBusyUntil){
+                        service.dispatch(cf,Point(.20f,.78f),Point(.80f,.78f),80L)
+                        actionBusyUntil=now+58L
+                    }
+                }else{
+                    if(resultSince==0L) resultSince=now
+                    if(now-resultSince>=2500L) state=RunState.RESULT
+                }
+            }
+            RunState.RESULT -> {
+                if(now-resultSince<200L)return
+                val lines=freshOcr(now)
+                val cup=cups.read(lines,now)
+                val confirmed=cupTracker.offer(cup,latestOcrAt.get())
+                if(confirmed!=null) queue.updateCups(confirmed)
+                val action=reward.next(lines,now)
+                if(action!=null){
+                    BotAccessibilityService.instance?.tap(action.second)
+                    actionBusyUntil=now+650L
+                    rewardSince=now
+                    state=RunState.REWARD
+                }else if(now-resultSince>1400L){
+                    queue.markMatch()
+                    val cur=queue.current()
+                    if(cur?.reached==true){
+                        if(queue.next()) { state=RunState.SELECT_BRAWLER } else state=RunState.DONE
+                    }else state=RunState.SELECT_MODE
+                }
+            }
+            RunState.REWARD -> {
+                val lines=freshOcr(now)
+                val action=reward.next(lines,now)
+                if(action!=null){
+                    BotAccessibilityService.instance?.tap(action.second)
+                    actionBusyUntil=now+650L
+                    rewardSince=now
+                }else if(now-rewardSince>1100L){
+                    state=RunState.RESULT
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    private fun freshOcr(now:Long):List<OcrLine> =
+        if(now-latestOcrAt.get()<=2000L) latestOcr.get() else emptyList()
+
+    fun status():String{
+        val q=queue.current()
+        val s=latestScene.get()
+        val p=s?.player?.point?.let{"P=${(it.x*100).round()}%,${(it.y*100).round()}%"}?:"P=--"
+        val e=s?.enemies?.firstOrNull()?.point?.let{"E=${(it.x*100).round()}%,${(it.y*100).round()}%"}?:"E=--"
+        val b=s?.ball?.point?.let{"B=${(it.x*100).round()}%,${(it.y*100).round()}%"}?:"B=--"
+        return "v29 | $state | ${q?.brawlerId?:"-"} ${q?.currentCups?:0}/${q?.targetCups?:0} осталось=${q?.remaining?:0} | $p $e $b"
+    }
+
+    private fun safeRecycle(b:android.graphics.Bitmap){try{if(!b.isRecycled)b.recycle()}catch(_:Throwable){}}
+    private fun Int.round()=this
+    override fun close(){
+        running=false
+        state=RunState.IDLE
+        frameChannel.close()
+        scope.cancel()
+        latestScene.set(null)
+        latestOcr.set(emptyList())
+        latestOcrAt.set(0L)
+        vision.close()
+        ocr.close()
+    }
+}
+
+==============================================================================
+FILE: app/src/main/java/com/rostik/touchbot/MatchVision.kt
+==============================================================================
+package com.rostik.touchbot
+
+import android.graphics.Bitmap
+import android.graphics.Color
+import kotlin.math.abs
+import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.min
+
+/**
+ * Adaptive marker detector.
+ *
+ * It deliberately supports both the green/cyan marker seen in some layouts
+ * and blue/cyan team markers. The player's identity is not inferred from
+ * color alone: spatial prior + indicator above + temporal continuity are used.
+ */
+class MatchVision {
+    private var lastPlayer: Point? = null
+    private var lastEnemy: Point? = null
+    private var lastBall: Point? = null
+    private var lastPlayerAt = 0L
+    private var lastEnemyAt = 0L
+    private var lastBallAt = 0L
+    private var lastVelocity = Point(0f, 0f)
+
+    fun detect(src: Bitmap, now: Long): MatchScene {
+        val w = 360
+        val h = 202
+        val bmp = Bitmap.createScaledBitmap(src, w, h, true)
+        val pixels = IntArray(w * h)
+        bmp.getPixels(pixels, 0, w, 0, 0, w, h)
+
+        val candidates = mutableListOf<Detection>()
+        for (y in 25 until 180 step 2) {
+            for (x in 8 until w - 8 step 2) {
+                val c = pixels[y * w + x]
+                val r = Color.red(c)
+                val g = Color.green(c)
+                val b = Color.blue(c)
+
+                // Team marker: accept green/cyan/blue variants.
+                val team = ((g > 150 && g > r * 1.28f && b > r * 1.10f) ||
+                        (b > 160 && g > 125 && b > r * 1.35f && g > r * 1.18f))
+                if (team) {
+                    val p = Point(x / w.toFloat(), y / h.toFloat())
+                    val score = markerScore(p, pixels, w, h, true)
+                    if (score > 0.52f) candidates += Detection(p, score, "TEAM")
+                }
+            }
+        }
+
+        val grouped = cluster(candidates)
+        val own = choosePlayer(grouped, pixels, w, h, now)
+        val allies = grouped.filter { d -> own == null || distance(d.point, own.point) > .075f }
+            .filter { it.confidence > .55f }
+            .take(3)
+
+        val enemies = findEnemies(pixels, w, h, now, own)
+        val ball = findBall(pixels, w, h, now, own?.point)
+
+        val superPoint = findSuper(pixels, w, h)
+        val conf = listOfNotNull(own?.confidence, ball?.confidence, enemies.maxOfOrNull { it.confidence })
+            .average().toFloat().coerceIn(0f, .98f)
+
+        if (bmp !== src) try { bmp.recycle() } catch (_: Throwable) {}
+
+        return MatchScene(
+            player = own,
+            enemies = enemies,
+            allies = allies,
+            ball = ball,
+            superPoint = superPoint?.point,
+            superReady = superPoint?.confidence ?: 0f >= .70f,
+            confidence = conf,
+            timestamp = now
+        )
+    }
+
+    private fun choosePlayer(
+        list: List<Detection>, pixels: IntArray, w: Int, h: Int, now: Long
+    ): Detection? {
+        if (list.isEmpty()) {
+            if (lastPlayer != null && now - lastPlayerAt < 180L) {
+                val p = Point(
+                    (lastPlayer!!.x + lastVelocity.x * .08f).coerceIn(.04f, .96f),
+                    (lastPlayer!!.y + lastVelocity.y * .08f).coerceIn(.12f, .92f)
+                )
+                return Detection(p, .52f, "PREDICTED_PLAYER")
+            }
+            return null
+        }
+        val scored = list.map { d ->
+            val indicator = hasIndicatorAbove(d.point, pixels, w, h)
+            val bottomPrior = 1f - (d.point.y - .55f).coerceAtLeast(0f) * 1.5f
+            val temporal = lastPlayer?.let { (1f - distance(it, d.point) / .16f).coerceIn(0f, 1f) } ?: 0f
+            d.copy(confidence = (d.confidence * .45f + indicator * .30f + bottomPrior.coerceIn(0f,1f)*.15f + temporal*.10f).coerceIn(0f,.99f))
+        }.maxByOrNull { it.confidence }
+        scored?.let {
+            lastPlayer?.let { old ->
+                val dt = ((now - lastPlayerAt).coerceAtLeast(1L)) / 1000f
+                lastVelocity = Point(
+                    ((it.point.x - old.x) / dt).coerceIn(-2f,2f),
+                    ((it.point.y - old.y) / dt).coerceIn(-2f,2f)
+                )
+            }
+            lastPlayer = it.point
+            lastPlayerAt = now
+        }
+        return scored?.takeIf { it.confidence >= .52f }
+    }
+
+    private fun findEnemies(pix: IntArray, w: Int, h: Int, now: Long, own: Detection?): List<Detection> {
+        val out = mutableListOf<Detection>()
+        for (y in 28 until 155 step 2) for (x in 8 until w-8 step 2) {
+            val c = pix[y*w+x]
+            val r=Color.red(c); val g=Color.green(c); val b=Color.blue(c)
+            val red = r > 155 && r > g*1.35f && r > b*1.25f && r-g > 55
+            if (!red) continue
+            val p=Point(x/w.toFloat(), y/h.toFloat())
+            if (own != null && distance(p, own.point) < .10f) continue
+            val temporal = lastEnemy?.let { (1f-distance(it,p)/.18f).coerceIn(0f,1f) } ?: 0f
+            val cScore=(.58f + temporal*.22f + geometryScore(p)*.20f).coerceIn(0f,.98f)
+            if (cScore > .52f) out += Detection(p,cScore,"ENEMY")
+        }
+        val grouped=cluster(out)
+        val best=grouped.maxByOrNull { it.confidence }
+        if (best != null) { lastEnemy=best.point; lastEnemyAt=now }
+        return grouped.sortedByDescending { it.confidence }.take(3)
+    }
+
+    private fun findBall(pix:IntArray,w:Int,h:Int,now:Long,player:Point?):Detection? {
+        var best:Detection?=null
+        for(y in 35 until 160 step 2) for(x in 10 until w-10 step 2) {
+            val c=pix[y*w+x]; val r=Color.red(c); val g=Color.green(c); val b=Color.blue(c)
+            val bright=(r+g+b)/3
+            val neutral=abs(r-g)<28 && abs(g-b)<28 && bright>135
+            if(!neutral) continue
+            val p=Point(x/w.toFloat(),y/h.toFloat())
+            if(player!=null && distance(p,player)<.065f) continue
+            val darkAround = neighborhoodDark(pix,w,h,x,y)
+            val temporal=lastBall?.let{(1f-distance(it,p)/.16f).coerceIn(0f,1f)}?:0f
+            val score=(.42f + darkAround*.25f + temporal*.25f + centerPrior(p)*.08f).coerceIn(0f,.98f)
+            if(best==null || score>best!!.confidence) best=Detection(p,score,"BALL")
+        }
+        if(best!=null && best!!.confidence>.55f){ lastBall=best!!.point; lastBallAt=now; return best }
+        if(lastBall!=null && now-lastBallAt<180L) return Detection(lastBall!!,.50f,"PREDICTED_BALL")
+        return null
+    }
+
+    private fun findSuper(pix:IntArray,w:Int,h:Int):Detection? {
+        var best:Detection?=null
+        for(y in 135 until 192 step 2) for(x in 245 until 355 step 2) {
+            val c=pix[y*w+x]; val r=Color.red(c); val g=Color.green(c); val b=Color.blue(c)
+            val bright=(r+g+b)/765f
+            val colored=(b>120 && r>70 && bright>.45f)
+            if(colored){
+                val p=Point(x/w.toFloat(),y/h.toFloat())
+                val score=(bright*.75f+.25f).coerceIn(0f,.98f)
+                if(best==null || score>best!!.confidence) best=Detection(p,score,"SUPER")
+            }
+        }
+        return best
+    }
+
+    private fun markerScore(p:Point,pix:IntArray,w:Int,h:Int,own:Boolean):Float {
+        val above=hasIndicatorAbove(p,pix,w,h)
+        val bottom=(1f-(p.y-.55f).coerceAtLeast(0f)*1.3f).coerceIn(0f,1f)
+        return (.50f+above*.25f+bottom*.15f).coerceIn(0f,.95f)
+    }
+
+    private fun hasIndicatorAbove(p:Point,pix:IntArray,w:Int,h:Int):Float {
+        val x=(p.x*w).toInt(); val y=(p.y*h).toInt()
+        var bright=0
+        for(dy in -14..-6) for(dx in -7..7){
+            val xx=x+dx; val yy=y+dy
+            if(xx !in 0 until w || yy !in 0 until h) continue
+            val c=pix[yy*w+xx]
+            if((Color.red(c)+Color.green(c)+Color.blue(c))/3>195) bright++
+        }
+        return (bright/80f).coerceIn(0f,1f)
+    }
+
+    private fun neighborhoodDark(p:IntArray,w:Int,h:Int,x:Int,y:Int):Float {
+        var dark=0
+        var n=0
+        for(dy in -5..5) for(dx in -5..5){
+            val xx=x+dx; val yy=y+dy
+            if(xx !in 0 until w || yy !in 0 until h) continue
+            n++; val c=p[yy*w+xx]
+            if((Color.red(c)+Color.green(c)+Color.blue(c))/3<105) dark++
+        }
+        return if(n==0) 0f else dark/n.toFloat()
+    }
+
+    private fun geometryScore(p:Point)=((1f-abs(p.x-.5f)*1.2f).coerceIn(0f,1f))
+    private fun centerPrior(p:Point)=((1f-distance(p,Point(.5f,.55f))/.7f).coerceIn(0f,1f))
+    private fun distance(a:Point,b:Point)=hypot((a.x-b.x).toDouble(),(a.y-b.y).toDouble()).toFloat()
+
+    private fun cluster(src:List<Detection>):List<Detection>{
+        val out=mutableListOf<Detection>()
+        for(d in src){
+            val i=out.indexOfFirst{distance(it.point,d.point)<.035f}
+            if(i<0) out+=d else if(d.confidence>out[i].confidence) out[i]=d
+        }
+        return out
+    }
+
+    fun close(){ lastPlayer=null; lastEnemy=null; lastBall=null }
+}
+
+==============================================================================
+FILE: app/src/main/java/com/rostik/touchbot/Models.kt
+==============================================================================
+package com.rostik.touchbot
+
+import android.graphics.Bitmap
+import java.util.concurrent.atomic.AtomicLong
+
+data class Point(val x: Float, val y: Float)
+data class RectN(val l: Float, val t: Float, val r: Float, val b: Float) {
+    fun center() = Point((l + r) / 2f, (t + b) / 2f)
+    fun area() = ((r-l).coerceAtLeast(0f) * (b-t).coerceAtLeast(0f))
+}
+data class Detection(val point: Point, val confidence: Float, val kind: String, val rect: RectN? = null)
+
+enum class ScreenType { HOME, BRAWLER_LIST, BRAWLER_PROFILE, MODE_SELECT, BRAWL_BALL_LOBBY, LOADING, MATCH, RESULT, REWARD, UNKNOWN, PAUSED }
+
+data class OcrLine(val text: String, val rect: RectN, val confidence: Float, val capturedAt: Long)
+
+data class MatchScene(
+    val player: Detection?,
+    val enemies: List<Detection>,
+    val allies: List<Detection>,
+    val ball: Detection?,
+    val superPoint: Point?,
+    val superReady: Boolean,
+    val confidence: Float,
+    val timestamp: Long
+)
+
+data class ControlFrame(
+    val moveX: Float = 0f,
+    val moveY: Float = 0f,
+    val aimX: Float = 0f,
+    val aimY: Float = 0f,
+    val fire: Boolean = false,
+    val useSuper: Boolean = false,
+    val superPoint: Point? = null
+)
+
+data class QueueItem(
+    val brawlerId: String,
+    var currentCups: Int,
+    var targetCups: Int,
+    var startCups: Int = currentCups,
+    var matchesPlayed: Int = 0
+) {
+    val remaining get() = (targetCups - currentCups).coerceAtLeast(0)
+    val reached get() = currentCups >= targetCups
+}
+
+enum class RunState { IDLE, PREPARE, SELECT_BRAWLER, SELECT_MODE, SELECT_MAP, PRESS_PLAY, LOADING, PLAYING, RESULT, REWARD, DONE, PAUSED, ERROR }
+
+class FrameLease(private val bitmap: Bitmap) {
+    private val refs = AtomicLong(1)
+    fun retain(): FrameLease { refs.incrementAndGet(); return this }
+    fun get(): Bitmap = bitmap
+    fun release() {
+        if (refs.decrementAndGet() == 0L && !bitmap.isRecycled) {
+            try { bitmap.recycle() } catch (_: Throwable) {}
+        }
+    }
+}
+
+==============================================================================
+FILE: app/src/main/java/com/rostik/touchbot/OcrEngine.kt
+==============================================================================
+package com.rostik.touchbot
+
+import android.graphics.Bitmap
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+
+class OcrEngine {
+    private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+
+    suspend fun read(bitmap: Bitmap): List<OcrLine> =
+        suspendCancellableCoroutine { cont ->
+            val image = InputImage.fromBitmap(bitmap, 0)
+            recognizer.process(image)
+                .addOnSuccessListener { result ->
+                    val now = System.currentTimeMillis()
+                    val lines = result.textBlocks.flatMap { block ->
+                        block.lines.map { line ->
+                            val r = line.boundingBox
+                            val w = bitmap.width.coerceAtLeast(1)
+                            val h = bitmap.height.coerceAtLeast(1)
+                            OcrLine(
+                                line.text,
+                                RectN(
+                                    (r?.left ?: 0) / w.toFloat(),
+                                    (r?.top ?: 0) / h.toFloat(),
+                                    (r?.right ?: 0) / w.toFloat(),
+                                    (r?.bottom ?: 0) / h.toFloat()
+                                ),
+                                0.8f,
+                                now
+                            )
+                        }
+                    }
+                    if (cont.isActive) cont.resume(lines)
+                }
+                .addOnFailureListener { if (cont.isActive) cont.resumeWithException(it) }
+        }
+
+    fun close() { recognizer.close() }
+}
+
+==============================================================================
+FILE: app/src/main/java/com/rostik/touchbot/QueueEngine.kt
+==============================================================================
+package com.rostik.touchbot
+
+class QueueEngine {
+    private val lock = Any()
+    private val items = mutableListOf<QueueItem>()
+    private var index = 0
+    private var version = 0L
+
+    fun replace(newItems: List<QueueItem>) = synchronized(lock) {
+        items.clear(); items.addAll(newItems); index = 0; version++
+    }
+
+    fun snapshot(): List<QueueItem> = synchronized(lock) { items.map { it.copy() } }
+    fun current(): QueueItem? = synchronized(lock) { items.getOrNull(index)?.copy() }
+    fun currentVersion(): Long = synchronized(lock) { version }
+
+    fun updateCups(value: Int): Boolean = synchronized(lock) {
+        val item = items.getOrNull(index) ?: return false
+        if (value < 0 || value > 10000) return false
+        if (kotlin.math.abs(value - item.currentCups) > 120) return false
+        item.currentCups = value
+        version++
+        true
+    }
+
+    fun markMatch() = synchronized(lock) {
+        items.getOrNull(index)?.let { it.matchesPlayed++ }
+        version++
+    }
+
+    fun next(): Boolean = synchronized(lock) {
+        if (index + 1 < items.size) { index++; version++; true } else false
+    }
+
+    fun finished(): Boolean = synchronized(lock) {
+        items.isNotEmpty() && index == items.lastIndex && items.all { it.reached }
+    }
+}
+
+==============================================================================
+FILE: app/src/main/java/com/rostik/touchbot/ReactiveBrawlBallController.kt
+==============================================================================
+package com.rostik.touchbot
+
+import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.random.Random
+
+class ReactiveBrawlBallController {
+    private var lastSuperAt = 0L
+    private var lastDodgeAt = 0L
+    private var patrolSign = 1f
+    private var patrolUntil = 0L
+
+    fun next(scene: MatchScene, now: Long, matchElapsedMs: Long): ControlFrame {
+        val p=scene.player ?: return ControlFrame(moveY=.25f)
+        if(now>=patrolUntil){
+            patrolSign = if(Random.nextBoolean()) 1f else -1f
+            patrolUntil = now + 900L + Random.nextLong(0,700)
+        }
+
+        val enemy=scene.enemies.minByOrNull{distance(it.point,p.point)}
+        val ball=scene.ball
+        val enemyThreat=enemy!=null && distance(enemy.point,p.point)<.20f
+
+        if(enemyThreat && now-lastDodgeAt>800L){
+            val dx=-(enemy!!.point.y-p.point.y)
+            val dy=(enemy.point.x-p.point.x)
+            val mag=max(.001f,hypot(dx.toDouble(),dy.toDouble()).toFloat())
+            lastDodgeAt=now
+            return ControlFrame(moveX=(dx/mag*patrolSign).coerceIn(-1f,1f),moveY=(dy/mag*patrolSign).coerceIn(-1f,1f))
+        }
+
+        val ballClose=ball!=null && distance(ball.point,p.point)<.13f
+        val enemyBlocks=enemy!=null && ball!=null && isBetween(p.point,ball.point,enemy.point)
+        val upwardAlly=scene.allies.filter{it.point.y<.35f && ball!=null && it.point.y<ball.point.y}
+            .maxByOrNull{it.confidence}
+
+        val attackPoint=when{
+            enemyBlocks -> enemy!!.point
+            ballClose && upwardAlly!=null -> upwardAlly.point
+            ballClose -> Point(.5f,.08f)
+            enemy!=null && distance(enemy.point,p.point)<.32f -> enemy.point
+            else -> null
+        }
+
+        val aim=attackPoint ?: Point(.5f,.08f)
+        val ax=(aim.x-p.point.x).coerceIn(-1f,1f)
+        val ay=(aim.y-p.point.y).coerceIn(-1f,1f)
+
+        val defendX=(.5f-p.point.x)*1.3f + patrolSign*.22f
+        val defendY=(.73f-p.point.y)*1.3f
+        val moveX=if(ball!=null && distance(ball.point,p.point)<.22f) (ball.point.x-p.point.x)*1.8f else defendX
+        val moveY=if(ball!=null && distance(ball.point,p.point)<.22f) (ball.point.y-p.point.y)*1.5f else defendY
+
+        val fire=attackPoint!=null
+        val opportunity=enemy!=null && (enemyBlocks || ballClose || distance(enemy.point,p.point)<.30f)
+        val useSuper=scene.superReady && opportunity && matchElapsedMs>=20_000L && now-lastSuperAt>=1_800L
+        if(useSuper) lastSuperAt=now
+
+        return ControlFrame(
+            moveX=moveX.coerceIn(-1f,1f),
+            moveY=moveY.coerceIn(-1f,1f),
+            aimX=ax, aimY=ay, fire=fire,
+            useSuper=useSuper, superPoint=scene.superPoint
+        )
+    }
+
+    private fun isBetween(a:Point,b:Point,c:Point):Boolean{
+        val abx=b.x-a.x; val aby=b.y-a.y
+        val acx=c.x-a.x; val acy=c.y-a.y
+        val len2=abx*abx+aby*aby
+        if(len2<.0001f) return false
+        val t=((acx*abx+acy*aby)/len2)
+        if(t !in .12f..1.05f) return false
+        val px=a.x+abx*t; val py=a.y+aby*t
+        return hypot((c.x-px).toDouble(),(c.y-py).toDouble()).toFloat()<.09f
+    }
+
+    private fun distance(a:Point,b:Point)=hypot((a.x-b.x).toDouble(),(a.y-b.y).toDouble()).toFloat()
+}
+
+==============================================================================
+FILE: app/src/main/java/com/rostik/touchbot/RewardHandler.kt
+==============================================================================
+package com.rostik.touchbot
+
+import android.util.Log
+
+/**
+ * Safe reward/popup state machine.
+ * It never taps a generic screen center. Every tap is tied to OCR aliases
+ * and/or a strongly constrained button geometry.
+ */
+class RewardHandler {
+    private var actionCount = 0
+    private var lastTapAt = 0L
+    private var stableAction = ""
+    private var stableCount = 0
+
+    private val aliases = mapOf(
+        "OPEN" to listOf("open","открыть","открыть!","открыть"),
+        "CLAIM" to listOf("claim","забрать","получить"),
+        "CONTINUE" to listOf("continue","продолжить","далее","дальше"),
+        "HOME" to listOf("home","главная","выйти"),
+        "CLOSE" to listOf("close","закрыть"),
+        "SKIP" to listOf("skip","пропустить")
+    )
+
+    fun reset(){ actionCount=0; stableAction=""; stableCount=0; lastTapAt=0L }
+
+    fun next(lines:List<OcrLine>, now:Long): Pair<String,Point>? {
+        if(actionCount>=8) return null
+        if(now-lastTapAt<450L) return null
+
+        val candidates=lines.mapNotNull { line ->
+            val normalized=line.text.lowercase().replace("ё","е").trim()
+            aliases.entries.firstNotNullOfOrNull { (action, words) ->
+                if(words.any{normalized.contains(it)}) action to line.rect.center() else null
+            }?.let { it.first to it.second }
+        }.filter { (_,p) -> p.y>.48f && p.y<.96f }
+
+        val best=candidates.maxByOrNull { (_,p) -> if(p.x in .20f.. .85f) 1f else .5f } ?: return null
+        if(best.first==stableAction) stableCount++ else { stableAction=best.first; stableCount=1 }
+        if(stableCount<2) return null
+
+        actionCount++
+        lastTapAt=now
+        Log.i("RewardHandler","confirmed action=${best.first} point=${best.second}")
+        return best
+    }
+
+    fun exhausted()=actionCount>=8
+}
+
+==============================================================================
+FILE: app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt
+==============================================================================
+package com.rostik.touchbot
+
+import android.app.*
+import android.content.Intent
+import android.graphics.PixelFormat
+import android.media.ImageReader
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
+import android.os.*
+import android.util.Log
+import androidx.core.app.ServiceCompat
+
+class ScreenCaptureService:Service(){
+    companion object {
+        const val EXTRA_RESULT_CODE="resultCode"
+        const val EXTRA_RESULT_DATA="resultData"
+        var onBitmap:((android.graphics.Bitmap)->Unit)?=null
+    }
+    private var projection:MediaProjection?=null
+    private var reader:ImageReader?=null
+    private var thread:HandlerThread?=null
+    private var handler:Handler?=null
+
+    override fun onCreate(){
+        super.onCreate()
+        thread=HandlerThread("capture").also{it.start()}
+        handler=Handler(thread!!.looper)
+    }
+
+    override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{
+        val code=intent?.getIntExtra(EXTRA_RESULT_CODE,-1) ?: -1
+        val data=intent?.getParcelableExtra<Intent>(EXTRA_RESULT_DATA) ?: return START_NOT_STICKY
+        val pm=getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        projection=pm.getMediaProjection(code,data)
+        if(projection==null) return START_NOT_STICKY
+        if(android.os.Build.VERSION.SDK_INT>=29){
+            ServiceCompat.startForeground(
+                this,
+                29,
+                notification(),
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            )
+        }else{
+            startForeground(29,notification())
+        }
+        val dm=resources.displayMetrics
+        reader=ImageReader.newInstance(dm.widthPixels,dm.heightPixels,PixelFormat.RGBA_8888,2)
+        reader!!.setOnImageAvailableListener({r->
+            val image=r.acquireLatestImage() ?: return@setOnImageAvailableListener
+            try{
+                val planes=image.planes
+                val p=planes[0]
+                val buf=p.buffer
+                val w=image.width; val h=image.height
+                val row=p.rowStride; val pixel=p.pixelStride
+                val paddedW=row/pixel
+                val bmp=android.graphics.Bitmap.createBitmap(paddedW,h,android.graphics.Bitmap.Config.ARGB_8888)
+                bmp.copyPixelsFromBuffer(buf)
+                val cropped=if(paddedW!=w) android.graphics.Bitmap.createBitmap(bmp,0,0,w,h) else bmp
+                if(cropped!==bmp) try{bmp.recycle()}catch(_:Throwable){}
+                onBitmap?.invoke(cropped) ?: try{cropped.recycle()}catch(_:Throwable){}
+            }catch(t:Throwable){Log.w("Capture","frame failed",t)}
+            finally{try{image.close()}catch(_:Throwable){}}
+        },handler)
+        projection!!.createVirtualDisplay("RostikCapture",dm.widthPixels,dm.heightPixels,dm.densityDpi,
+            android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,reader!!.surface,null,handler)
+        return START_STICKY
+    }
+
+    private fun notification():Notification{
+        val ch=NotificationChannel("capture","Rostik Capture",NotificationManager.IMPORTANCE_LOW)
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(ch)
+        return Notification.Builder(this,"capture").setContentTitle("Rostik Touch Bot").setContentText("Screen capture active").setSmallIcon(android.R.drawable.ic_menu_view).build()
+    }
+
+    override fun onDestroy(){
+        reader?.close(); projection?.stop(); thread?.quitSafely(); thread=null; handler=null
+        super.onDestroy()
+    }
+    override fun onBind(intent:Intent?)=null
+}
+
+==============================================================================
+FILE: app/src/main/res/values/strings.xml
+==============================================================================
+<resources>
+    <string name="app_name">Rostik Touch Bot</string>
+</resources>
+
+==============================================================================
+FILE: app/src/main/res/values/styles.xml
+==============================================================================
+<resources>
+    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:colorAccent">#00C853</item>
+    </style>
+</resources>
+
+==============================================================================
+FILE: app/src/main/res/xml/accessibility_service_config.xml
+==============================================================================
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canRetrieveWindowContent="false"
+    android:canPerformGestures="true"
+    android:notificationTimeout="100"
+    android:description="@string/app_name" />
+
+==============================================================================
+FILE: build.gradle.kts
+==============================================================================
+plugins {
+    id("com.android.application") version "8.7.3" apply false
+    id("org.jetbrains.kotlin.android") version "2.1.0" apply false
+}
+
+==============================================================================
+FILE: gradle/wrapper/gradle-wrapper.properties
+==============================================================================
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+networkTimeout=10000
+validateDistributionUrl=true
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.10.2-bin.zip
+
+==============================================================================
+FILE: gradle.properties
+==============================================================================
+org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+android.useAndroidX=true
+kotlin.code.style=official
+
+==============================================================================
+FILE: settings.gradle.kts
+==============================================================================
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "RostikTouchBot"
+include(":app")
