@@ -19,20 +19,49 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           if [ -f "v30src/settings.gradle.kts" ]; then
             echo "Using v30src from repository root"
+
           elif [ -f "github_ready_v30_9/v30src/settings.gradle.kts" ]; then
             echo "Moving source from github_ready_v30_9/v30src"
             rm -rf v30src
             cp -a github_ready_v30_9/v30src ./v30src
-          elif [ -f "RostikTouchBot-v30.9-FINAL-source.zip" ]; then
-            echo "Extracting v30.9 source ZIP"
-            rm -rf v30src
-            unzip -q "RostikTouchBot-v30.9-FINAL-source.zip" -d .
+
           else
-            echo "ERROR: v30.9 source not found"
-            find . -maxdepth 4 -type f -not -path './.git/*' | sort | head -250
-            exit 1
+            SOURCE_ZIP=""
+
+            for candidate in \
+              "RostikTouchBot-v30.9-FINAL-source.zip" \
+              "RostikTouchBot-v30.9-GITHUB-READY.zip"; do
+              if [ -f "$candidate" ]; then
+                SOURCE_ZIP="$candidate"
+                break
+              fi
+            done
+
+            if [ -z "$SOURCE_ZIP" ]; then
+              echo "ERROR: v30.9 source not found"
+              find . -maxdepth 4 -type f -not -path './.git/*' | sort | head -250
+              exit 1
+            fi
+
+            echo "Extracting $SOURCE_ZIP"
+            rm -rf v30src .v30-extracted
+            mkdir -p .v30-extracted
+            unzip -q "$SOURCE_ZIP" -d .v30-extracted
+
+            if [ -f ".v30-extracted/v30src/settings.gradle.kts" ]; then
+              cp -a .v30-extracted/v30src ./v30src
+
+            elif [ -f ".v30-extracted/github_ready_v30_9/v30src/settings.gradle.kts" ]; then
+              cp -a .v30-extracted/github_ready_v30_9/v30src ./v30src
+
+            else
+              echo "ERROR: ZIP does not contain the expected v30src directory"
+              find .v30-extracted -maxdepth 5 -type f | sort | head -250
+              exit 1
+            fi
           fi
 
           test -f v30src/settings.gradle.kts
@@ -41,6 +70,7 @@ jobs:
           test -f v30src/app/src/main/AndroidManifest.xml
           test -f v30src/app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
           test -f v30src/app/src/main/java/com/rostik/touchbot/ControlDetector.kt
+
           echo "Source structure OK"
           echo "Source files: $(find v30src -type f | wc -l)"
 
