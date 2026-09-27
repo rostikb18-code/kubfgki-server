@@ -11,30 +11,45 @@ jobs:
       contents: read
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Locate v30.2 source ZIP
+      - name: Locate and prepare v30.2 source
         shell: bash
         run: |
           set -euo pipefail
-          ZIP=""
-          for p in \
-            RostikTouchBot-v30.2-FINAL-source.zip \
-            source/RostikTouchBot-v30.2-FINAL-source.zip \
-            ./RostikTouchBot-v30.2-FINAL-source.zip; do
-            if [ -f "$p" ]; then ZIP="$p"; break; fi
-          done
-          if [ -z "$ZIP" ]; then
-            echo "Put RostikTouchBot-v30.2-FINAL-source.zip in the repository root (or source/)."
+
+          # Accept either an already extracted v30src/ directory or the official ZIP.
+          if [ -f "v30src/settings.gradle.kts" ]; then
+            echo "Using repository directory: v30src"
+          elif [ -f "RostikTouchBot-v30.2-FINAL-source.zip" ]; then
+            echo "Found repository ZIP: RostikTouchBot-v30.2-FINAL-source.zip"
+            rm -rf v30src
+            unzip -q "RostikTouchBot-v30.2-FINAL-source.zip" -d .
+          elif [ -f "source/RostikTouchBot-v30.2-FINAL-source.zip" ]; then
+            echo "Found source/ ZIP: source/RostikTouchBot-v30.2-FINAL-source.zip"
+            rm -rf v30src
+            unzip -q "source/RostikTouchBot-v30.2-FINAL-source.zip" -d .
+          else
+            echo "ERROR: v30.2 source was not found."
+            echo "Expected one of:"
+            echo "  v30src/settings.gradle.kts"
+            echo "  RostikTouchBot-v30.2-FINAL-source.zip"
+            echo "  source/RostikTouchBot-v30.2-FINAL-source.zip"
+            echo ""
+            echo "Repository files:" 
+            find . -maxdepth 3 -type f -not -path './.git/*' | sort | head -200
             exit 1
           fi
-          rm -rf v30src
-          unzip -q "$ZIP" -d .
+
           test -f v30src/settings.gradle.kts
+          test -f v30src/build.gradle.kts
+          test -f v30src/app/build.gradle.kts
           test -f v30src/app/src/main/AndroidManifest.xml
           test -f v30src/app/src/main/assets/reference/brawl_ball_lobby.png
-          echo "SOURCE=$ZIP"
+
+          echo "Source structure OK"
+          echo "Asset files: $(find v30src/app/src/main/assets -type f | wc -l)"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -53,30 +68,36 @@ jobs:
         run: |
           set -euo pipefail
           SDKMANAGER="$(command -v sdkmanager)"
-          "$SDKMANAGER" --licenses < <(yes) >/dev/null || true
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Setup Gradle 8.10.2
+      - name: Set up Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.10.2'
 
-      - name: Build debug and release
+      - name: Build debug APK
         working-directory: v30src
         shell: bash
         run: |
           set -euo pipefail
           gradle :app:assembleDebug --stacktrace --no-daemon
-          gradle :app:assembleRelease --stacktrace --no-daemon
 
-      - name: Verify outputs
+      - name: Build release APK
+        working-directory: v30src
         shell: bash
         run: |
           set -euo pipefail
-          test -f v30src/app/build/outputs/apk/debug/app-debug.apk
-          test -f v30src/app/build/outputs/apk/release/app-release-unsigned.apk
-          ls -lh v30src/app/build/outputs/apk/debug/app-debug.apk
-          ls -lh v30src/app/build/outputs/apk/release/app-release-unsigned.apk
+          gradle :app:assembleRelease --stacktrace --no-daemon
+
+      - name: Verify APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEBUG="v30src/app/build/outputs/apk/debug/app-debug.apk"
+          RELEASE="v30src/app/build/outputs/apk/release/app-release-unsigned.apk"
+          test -s "$DEBUG"
+          test -s "$RELEASE"
+          ls -lh "$DEBUG" "$RELEASE"
 
       - name: Upload APKs
         uses: actions/upload-artifact@v4
