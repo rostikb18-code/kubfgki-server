@@ -1,8 +1,9 @@
-name: Build Rostik Touch Bot v30.4
+name: Build Rostik Touch Bot v30.9
 
 on:
-  push:
   workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
 
 jobs:
   build:
@@ -14,23 +15,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Locate and prepare v30.4 source
+      - name: Locate v30.9 source
         shell: bash
         run: |
           set -euo pipefail
           if [ -f "v30src/settings.gradle.kts" ]; then
-            echo "Using repository directory: v30src"
-          elif [ -f "RostikTouchBot-v30.4-FINAL-source.zip" ]; then
-            echo "Found source ZIP"
+            echo "Using v30src from repository root"
+          elif [ -f "github_ready_v30_9/v30src/settings.gradle.kts" ]; then
+            echo "Moving source from github_ready_v30_9/v30src"
             rm -rf v30src
-            unzip -q "RostikTouchBot-v30.4-FINAL-source.zip" -d .
-          elif [ -f "source/RostikTouchBot-v30.4-FINAL-source.zip" ]; then
-            echo "Found source ZIP in source/"
+            cp -a github_ready_v30_9/v30src ./v30src
+          elif [ -f "RostikTouchBot-v30.9-FINAL-source.zip" ]; then
+            echo "Extracting v30.9 source ZIP"
             rm -rf v30src
-            unzip -q "source/RostikTouchBot-v30.4-FINAL-source.zip" -d .
+            unzip -q "RostikTouchBot-v30.9-FINAL-source.zip" -d .
           else
-            echo "ERROR: v30.4 source was not found."
-            find . -maxdepth 3 -type f -not -path './.git/*' | sort | head -200
+            echo "ERROR: v30.9 source not found"
+            find . -maxdepth 4 -type f -not -path './.git/*' | sort | head -250
             exit 1
           fi
 
@@ -38,10 +39,10 @@ jobs:
           test -f v30src/build.gradle.kts
           test -f v30src/app/build.gradle.kts
           test -f v30src/app/src/main/AndroidManifest.xml
-          test -f v30src/app/src/main/java/com/rostik/touchbot/OverlayService.kt
-          test -f v30src/app/src/main/assets/reference/brawl_ball_lobby.png
+          test -f v30src/app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
+          test -f v30src/app/src/main/java/com/rostik/touchbot/ControlDetector.kt
           echo "Source structure OK"
-          echo "Asset files: $(find v30src/app/src/main/assets -type f | wc -l)"
+          echo "Source files: $(find v30src -type f | wc -l)"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -53,19 +54,22 @@ jobs:
         uses: android-actions/setup-android@v4
         with:
           accept-android-sdk-licenses: true
-          packages: ''
 
       - name: Install Android SDK 35
         shell: bash
         run: |
           set -euo pipefail
-          SDKMANAGER="$(command -v sdkmanager)"
-          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.10.2'
+
+      - name: Check Gradle project
+        working-directory: v30src
+        shell: bash
+        run: gradle tasks --stacktrace --no-daemon
 
       - name: Build debug APK
         working-directory: v30src
@@ -87,11 +91,11 @@ jobs:
           test -s "$RELEASE"
           ls -lh "$DEBUG" "$RELEASE"
 
-      - name: Upload APKs
+      - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: RostikTouchBot-v30.4-APKs
+          name: RostikTouchBot-v30.9-APKs
+          if-no-files-found: error
           path: |
             v30src/app/build/outputs/apk/debug/app-debug.apk
             v30src/app/build/outputs/apk/release/app-release-unsigned.apk
-          if-no-files-found: error
