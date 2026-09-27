@@ -1,4 +1,4 @@
-name: Build Rostik Touch Bot v30.2
+name: Build Rostik Touch Bot v30.4
 
 on:
   push:
@@ -14,30 +14,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Locate and prepare v30.2 source
+      - name: Locate and prepare v30.4 source
         shell: bash
         run: |
           set -euo pipefail
-
-          # Accept either an already extracted v30src/ directory or the official ZIP.
           if [ -f "v30src/settings.gradle.kts" ]; then
             echo "Using repository directory: v30src"
-          elif [ -f "RostikTouchBot-v30.2-FINAL-source.zip" ]; then
-            echo "Found repository ZIP: RostikTouchBot-v30.2-FINAL-source.zip"
+          elif [ -f "RostikTouchBot-v30.4-FINAL-source.zip" ]; then
+            echo "Found source ZIP"
             rm -rf v30src
-            unzip -q "RostikTouchBot-v30.2-FINAL-source.zip" -d .
-          elif [ -f "source/RostikTouchBot-v30.2-FINAL-source.zip" ]; then
-            echo "Found source/ ZIP: source/RostikTouchBot-v30.2-FINAL-source.zip"
+            unzip -q "RostikTouchBot-v30.4-FINAL-source.zip" -d .
+          elif [ -f "source/RostikTouchBot-v30.4-FINAL-source.zip" ]; then
+            echo "Found source ZIP in source/"
             rm -rf v30src
-            unzip -q "source/RostikTouchBot-v30.2-FINAL-source.zip" -d .
+            unzip -q "source/RostikTouchBot-v30.4-FINAL-source.zip" -d .
           else
-            echo "ERROR: v30.2 source was not found."
-            echo "Expected one of:"
-            echo "  v30src/settings.gradle.kts"
-            echo "  RostikTouchBot-v30.2-FINAL-source.zip"
-            echo "  source/RostikTouchBot-v30.2-FINAL-source.zip"
-            echo ""
-            echo "Repository files:" 
+            echo "ERROR: v30.4 source was not found."
             find . -maxdepth 3 -type f -not -path './.git/*' | sort | head -200
             exit 1
           fi
@@ -46,8 +38,8 @@ jobs:
           test -f v30src/build.gradle.kts
           test -f v30src/app/build.gradle.kts
           test -f v30src/app/src/main/AndroidManifest.xml
+          test -f v30src/app/src/main/java/com/rostik/touchbot/OverlayService.kt
           test -f v30src/app/src/main/assets/reference/brawl_ball_lobby.png
-
           echo "Source structure OK"
           echo "Asset files: $(find v30src/app/src/main/assets -type f | wc -l)"
 
@@ -78,16 +70,12 @@ jobs:
       - name: Build debug APK
         working-directory: v30src
         shell: bash
-        run: |
-          set -euo pipefail
-          gradle :app:assembleDebug --stacktrace --no-daemon
+        run: gradle :app:assembleDebug --stacktrace --no-daemon
 
       - name: Build release APK
         working-directory: v30src
         shell: bash
-        run: |
-          set -euo pipefail
-          gradle :app:assembleRelease --stacktrace --no-daemon
+        run: gradle :app:assembleRelease --stacktrace --no-daemon
 
       - name: Verify APKs
         shell: bash
@@ -102,7 +90,7 @@ jobs:
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: RostikTouchBot-v30.2-APKs
+          name: RostikTouchBot-v30.4-APKs
           path: |
             v30src/app/build/outputs/apk/debug/app-debug.apk
             v30src/app/build/outputs/apk/release/app-release-unsigned.apk
