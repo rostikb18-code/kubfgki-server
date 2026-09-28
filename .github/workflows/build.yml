@@ -311,18 +311,70 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK components
+      - name: Configure Android SDK (modern command-line tools only)
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager \
+
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [[ -z "$SDK_ROOT" || ! -d "$SDK_ROOT" ]]; then
+            echo "ERROR: Android SDK root was not found."
+            echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-<unset>}"
+            echo "ANDROID_HOME=${ANDROID_HOME:-<unset>}"
+            exit 1
+          fi
+
+          SDKMANAGER=""
+          for candidate in \
+            "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "$SDK_ROOT/cmdline-tools/*/bin/sdkmanager" \
+            "$SDK_ROOT/tools/bin/sdkmanager"
+          do
+            if [[ "$candidate" == *"*"* ]]; then
+              for expanded in $candidate; do
+                if [[ -x "$expanded" ]]; then
+                  SDKMANAGER="$expanded"
+                  break 2
+                fi
+              done
+            elif [[ -x "$candidate" ]]; then
+              SDKMANAGER="$candidate"
+              break
+            fi
+          done
+
+          if [[ -z "$SDKMANAGER" ]]; then
+            echo "ERROR: sdkmanager was not found in the installed Android SDK."
+            find "$SDK_ROOT/cmdline-tools" -maxdepth 4 -type f -name sdkmanager -print 2>/dev/null || true
+            exit 1
+          fi
+
+          SDKMANAGER_DIR="$(dirname "$SDKMANAGER")"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$SDKMANAGER_DIR" >> "$GITHUB_PATH"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK_ROOT/emulator" >> "$GITHUB_PATH"
+
+          echo "Android SDK: $SDK_ROOT"
+          echo "sdkmanager: $SDKMANAGER"
+
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+
+          "$SDKMANAGER" \
             "platform-tools" \
             "platforms;android-${ANDROID_PLATFORM}" \
             "build-tools;${ANDROID_BUILD_TOOLS}"
+
+      - name: Verify Android SDK components
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v sdkmanager
+          command -v adb || true
+          test -d "$ANDROID_SDK_ROOT/platforms/android-${ANDROID_PLATFORM}"
+          test -d "$ANDROID_SDK_ROOT/build-tools/${ANDROID_BUILD_TOOLS}"
+          echo "Android SDK ${ANDROID_PLATFORM} / build-tools ${ANDROID_BUILD_TOOLS}: OK"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
