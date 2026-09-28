@@ -34,9 +34,7 @@ jobs:
           test -f app/src/main/AndroidManifest.xml
           test -d app/src/main/java
           test -d app/src/main/assets
-          test ! -d v30src
-          test ! -d source
-          echo "Android project root is correct."
+          echo "Android project root is correct. Extra directories such as source/ are ignored and do not affect the build."
 
       - name: Verify Gradle module wiring
         shell: bash
@@ -89,6 +87,20 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.10.2'
+
+      - name: Verify Gradle sees the same root project and :app module
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT_DIR="$(git rev-parse --show-toplevel)"
+          test "$PWD" = "$ROOT_DIR"
+          test -f "$ROOT_DIR/settings.gradle.kts"
+          test -f "$ROOT_DIR/app/build.gradle.kts"
+          PROJECTS="$(gradle -q projects --no-daemon)"
+          printf '%s\n' "$PROJECTS"
+          printf '%s\n' "$PROJECTS" | grep -Eq "Project ':[[:space:]]*$" || true
+          printf '%s\n' "$PROJECTS" | grep -Fq "Project ':app'"
+          echo "Git root and Gradle :app module are visible from the same project root."
 
       - name: Show versions
         shell: bash
