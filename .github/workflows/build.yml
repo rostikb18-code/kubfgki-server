@@ -14,64 +14,266 @@ concurrency:
   group: rostik-touch-bot-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  GRADLE_VERSION: '8.10.2'
+  ANDROID_PLATFORM: '35'
+  ANDROID_BUILD_TOOLS: '35.0.0'
+
 jobs:
-  verify-and-build:
-    name: Verify and build Android project
+  build:
+    name: Discover, verify and build Android project
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
-      - name: Verify repository is the Android project root
+      # IMPORTANT:
+      # The GitHub repository may contain the Android project at:
+      #   ./
+      #   ./source/
+      #   ./v30src/
+      # or another nested directory.
+      # We discover it ONCE and every following step uses PROJECT_ROOT.
+      # No check below assumes that the repository root is the Android root.
+      - name: Discover Android project root
         shell: bash
         run: |
           set -euo pipefail
-          test -f settings.gradle.kts
-          test -f build.gradle.kts
-          test -f gradle.properties
-          test -f app/build.gradle.kts
+
+          REPO_ROOT="$(git rev-parse --show-toplevel)"
+          cd "$REPO_ROOT"
+
+          declare -a CANDIDATES=()
+
+          add_candidate() {
+            local d="$1"
+            [[ -d "$d" ]] || return 0
+            [[ -f "$d/settings.gradle.kts" || -f "$d/settings.gradle" ]] || return 0
+            [[ -f "$d/app/build.gradle.kts" || -f "$d/app/build.gradle" ]] || return 0
+            [[ -f "$d/app/src/main/AndroidManifest.xml" ]] || return 0
+
+            local existing
+            for existing in "${CANDIDATES[@]:-}"; do
+              [[ "$existing" == "$d" ]] && return 0
+            done
+            CANDIDATES+=("$d")
+          }
+
+          # Fast-path the locations most commonly used by this project.
+          add_candidate "$REPO_ROOT"
+          add_candidate "$REPO_ROOT/source"
+          add_candidate "$REPO_ROOT/v30src"
+
+          # Also discover nested Android projects. Do not enter .git, Gradle
+          # caches, build outputs, node_modules, or generated directories.
+          while IFS= read -r -d '' settings_file; do
+            add_candidate "$(dirname "$settings_file")"
+          done < <(
+            find "$REPO_ROOT" \
+              -type d \( \
+                -name .git -o \
+                -name .gradle -o \
+                -name build -o \
+                -name node_modules \
+              \) -prune -false \
+              -o -type f \( -name settings.gradle.kts -o -name settings.gradle \) -print0
+          )
+
+          if (( ${#CANDIDATES[@]} == 0 )); then
+            echo "ERROR: No Android Gradle project was found."
+            echo "Required files in the same directory:"
+            echo "  settings.gradle(.kts)"
+            echo "  app/build.gradle(.kts)"
+            echo "  app/src/main/AndroidManifest.xml"
+            echo
+            echo "Repository tree (first 250 files):"
+            find "$REPO_ROOT" -maxdepth 5 -type f \
+              -not -path '*/.git/*' \
+              -not -path '*/.gradle/*' \
+              -not -path '*/build/*' \
+              | sort | head -250
+            exit 1
+          fi
+
+          score_candidate() {
+            local d="$1"
+            local score=0
+            local icon_count=0
+            local manifest_count=0
+
+            # Core Android/Gradle project files.
+            [[ -f "$d/settings.gradle.kts" ]] && score=$((score+3))
+            [[ -f "$d/settings.gradle" ]] && score=$((score+2))
+            [[ -f "$d/build.gradle.kts" ]] && score=$((score+2))
+            [[ -f "$d/build.gradle" ]] && score=$((score+2))
+            [[ -f "$d/gradle.properties" ]] && score=$((score+1))
+            [[ -d "$d/gradle" ]] && score=$((score+1))
+
+            # Kotlin/Java source directory: accept either layout.
+            [[ -d "$d/app/src/main/kotlin" ]] && score=$((score+3))
+            [[ -d "$d/app/src/main/java" ]] && score=$((score+3))
+
+            # This project specifically requires the brawler assets.
+            [[ -d "$d/app/src/main/assets" ]] && score=$((score+5))
+            [[ -d "$d/app/src/main/assets/brawler_icons" ]] && score=$((score+8))
+            [[ -f "$d/app/src/main/assets/brawler_icons_manifest.txt" ]] && score=$((score+8))
+            [[ -f "$d/app/src/main/assets/reference/brawl_ball_lobby.png" ]] && score=$((score+3))
+
+            if [[ -d "$d/app/src/main/assets/brawler_icons" ]]; then
+              icon_count="$(find "$d/app/src/main/assets/brawler_icons" -maxdepth 1 -type f -name '*.png' | wc -l)"
+              [[ "$icon_count" -eq 108 ]] && score=$((score+30))
+            fi
+
+            if [[ -f "$d/app/src/main/assets/brawler_icons_manifest.txt" ]]; then
+              manifest_count="$(grep -cve '^[[:space:]]*$' "$d/app/src/main/assets/brawler_icons_manifest.txt" || true)"
+              [[ "$manifest_count" -eq 108 ]] && score=$((score+20))
+            fi
+
+            # Prefer the known legacy locations only as a final tie-breaker.
+            case "$d" in
+              "$REPO_ROOT") score=$((score+2)) ;;
+              "$REPO_ROOT/source") score=$((score+1)) ;;
+            esac
+
+            printf '%s' "$score"
+          }
+
+          BEST=""
+          BEST_SCORE=-1
+          echo "Discovered candidates:"
+          for d in "${CANDIDATES[@]}"; do
+            score="$(score_candidate "$d")"
+            printf '  score=%-3s %s\n' "$score" "$d"
+
+            if (( score > BEST_SCORE )); then
+              BEST="$d"
+              BEST_SCORE="$score"
+            elif (( score == BEST_SCORE )); then
+              # Stable tie-breaker: shorter path, then lexical order.
+              best_len=${#BEST}
+              d_len=${#d}
+              if (( d_len < best_len )) || { (( d_len == best_len )) && [[ "$d" < "$BEST" ]]; }; then
+                BEST="$d"
+              fi
+            fi
+          done
+
+          PROJECT_ROOT="$BEST"
+          PROJECT_ROOT_REL="${PROJECT_ROOT#"$REPO_ROOT"/}"
+          [[ "$PROJECT_ROOT" == "$REPO_ROOT" ]] && PROJECT_ROOT_REL="."
+
+          echo
+          echo "Repository root : $REPO_ROOT"
+          echo "Android root    : $PROJECT_ROOT"
+          echo "Relative root   : $PROJECT_ROOT_REL"
+          echo "Score           : $BEST_SCORE"
+
+          {
+            echo "PROJECT_ROOT=$PROJECT_ROOT"
+            echo "PROJECT_ROOT_REL=$PROJECT_ROOT_REL"
+          } >> "$GITHUB_ENV"
+
+      - name: Verify discovered Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_ROOT"
+
+          test -f settings.gradle.kts || test -f settings.gradle
+          test -f app/build.gradle.kts || test -f app/build.gradle
           test -f app/src/main/AndroidManifest.xml
-          test -d app/src/main/java
+          test -d app/src/main/kotlin || test -d app/src/main/java
           test -d app/src/main/assets
-          echo "Android project root is correct. Extra directories such as source/ are ignored and do not affect the build."
+          test -d app/src/main/assets/brawler_icons
+
+          echo "Using Android project root: $PROJECT_ROOT"
+          echo "Repository may contain source/, v30src/, or other unrelated directories; they are ignored."
 
       - name: Verify Gradle module wiring
         shell: bash
         run: |
           set -euo pipefail
-          grep -Eq 'include\([[:space:]]*":app"[[:space:]]*\)' settings.gradle.kts
-          grep -Eq 'com\.android\.application' build.gradle.kts
-          grep -Eq 'com\.android\.application' app/build.gradle.kts
-          grep -Eq 'org\.jetbrains\.kotlin\.android' app/build.gradle.kts
+          cd "$PROJECT_ROOT"
+
+          SETTINGS="settings.gradle.kts"
+          [[ -f "$SETTINGS" ]] || SETTINGS="settings.gradle"
+          APP_BUILD="app/build.gradle.kts"
+          [[ -f "$APP_BUILD" ]] || APP_BUILD="app/build.gradle"
+
+          grep -Eq 'include[[:space:]]*\([[:space:]]*["'"']?:app["'"']?[[:space:]]*\)' "$SETTINGS"
+          grep -Eq 'com\.android\.application' "$APP_BUILD"
+          grep -Eq 'org\.jetbrains\.kotlin\.android|org\.jetbrains\.kotlin\.jvm' "$APP_BUILD" || {
+            echo "ERROR: Kotlin plugin was not found in $APP_BUILD"
+            exit 1
+          }
+
           echo "Gradle root -> :app wiring is present."
 
-      - name: Verify source and asset references
+      - name: Verify 108 brawler assets and references
         shell: bash
         run: |
           set -euo pipefail
-          test -f app/src/main/assets/brawler_icons_manifest.txt
-          ICON_COUNT=$(find app/src/main/assets/brawler_icons -maxdepth 1 -type f -name '*.png' | wc -l)
+          cd "$PROJECT_ROOT"
+
+          ASSETS="app/src/main/assets"
+          ICONS="$ASSETS/brawler_icons"
+          MANIFEST="$ASSETS/brawler_icons_manifest.txt"
+
+          test -f "$MANIFEST"
+          test -d "$ICONS"
+
+          ICON_COUNT="$(find "$ICONS" -maxdepth 1 -type f -name '*.png' | wc -l)"
+          MANIFEST_COUNT="$(grep -cve '^[[:space:]]*$' "$MANIFEST" || true)"
+
+          echo "PNG icons      : $ICON_COUNT"
+          echo "Manifest items : $MANIFEST_COUNT"
+
           test "$ICON_COUNT" -eq 108
-          MANIFEST_COUNT=$(wc -l < app/src/main/assets/brawler_icons_manifest.txt)
           test "$MANIFEST_COUNT" -eq 108
-          while IFS= read -r id; do
-            test -n "$id"
-            test -f "app/src/main/assets/brawler_icons/${id}.png"
-          done < app/src/main/assets/brawler_icons_manifest.txt
-          test -f app/src/main/assets/reference/brawl_ball_lobby.png
-          echo "Brawler assets: $ICON_COUNT/108"
-          echo "Reference assets: OK"
+
+          declare -A SEEN=()
+          while IFS= read -r raw_id; do
+            id="$(printf '%s' "$raw_id" | tr -d '\r' | xargs)"
+            [[ -n "$id" ]] || continue
+            [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || {
+              echo "ERROR: Invalid brawler id in manifest: '$id'"
+              exit 1
+            }
+            [[ -z "${SEEN[$id]+x}" ]] || {
+              echo "ERROR: Duplicate brawler id in manifest: $id"
+              exit 1
+            }
+            SEEN[$id]=1
+            test -f "$ICONS/${id}.png" || {
+              echo "ERROR: Missing icon: $ICONS/${id}.png"
+              exit 1
+            }
+          done < "$MANIFEST"
+
+          # Every PNG must be represented in the manifest too.
+          while IFS= read -r -d '' png; do
+            id="$(basename "$png" .png)"
+            [[ -n "${SEEN[$id]+x}" ]] || {
+              echo "ERROR: PNG is not listed in manifest: $id.png"
+              exit 1
+            }
+          done < <(find "$ICONS" -maxdepth 1 -type f -name '*.png' -print0)
+
+          # Brawl Ball reference is required by the runtime if present in this release.
+          test -f "$ASSETS/reference/brawl_ball_lobby.png"
+
+          echo "All 108 brawler icons, manifest entries, and Brawl Ball reference are valid."
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
 
       - name: Install Android SDK components
         shell: bash
@@ -80,61 +282,66 @@ jobs:
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager \
             "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+            "platforms;android-${ANDROID_PLATFORM}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}"
 
-      - name: Set up Gradle 8.10.2
-        uses: gradle/actions/setup-gradle@v6
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.10.2'
+          gradle-version: ${{ env.GRADLE_VERSION }}
 
-      - name: Verify Gradle sees the same root project and :app module
+      - name: Verify Gradle sees the discovered project and :app
         shell: bash
         run: |
           set -euo pipefail
-          ROOT_DIR="$(git rev-parse --show-toplevel)"
-          test "$PWD" = "$ROOT_DIR"
-          test -f "$ROOT_DIR/settings.gradle.kts"
-          test -f "$ROOT_DIR/app/build.gradle.kts"
+          cd "$PROJECT_ROOT"
           PROJECTS="$(gradle -q projects --no-daemon)"
           printf '%s\n' "$PROJECTS"
-          printf '%s\n' "$PROJECTS" | grep -Eq "Project ':[[:space:]]*$" || true
           printf '%s\n' "$PROJECTS" | grep -Fq "Project ':app'"
-          echo "Git root and Gradle :app module are visible from the same project root."
-
-      - name: Show versions
-        shell: bash
-        run: |
-          java -version
-          gradle --version
-          echo "Project files:"
-          find . -maxdepth 2 -type f | sort | head -120
+          echo "Gradle sees :app from: $PROJECT_ROOT"
 
       - name: Gradle configuration check
-        run: gradle tasks --stacktrace --no-daemon
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_ROOT"
+          gradle tasks --stacktrace --no-daemon
 
       - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace --no-daemon
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_ROOT"
+          gradle :app:assembleDebug --stacktrace --no-daemon
 
       - name: Build release APK
-        run: gradle :app:assembleRelease --stacktrace --no-daemon
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_ROOT"
+          gradle :app:assembleRelease --stacktrace --no-daemon
 
       - name: Verify APK contains all 108 brawler icons
         shell: bash
         run: |
           set -euo pipefail
-          DEBUG_APK=$(find app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)
-          RELEASE_APK=$(find app/build/outputs/apk/release -type f -name '*.apk' -print -quit)
+          cd "$PROJECT_ROOT"
+
+          DEBUG_APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)"
+          RELEASE_APK="$(find app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
           test -n "$DEBUG_APK"
           test -n "$RELEASE_APK"
 
           verify_apk() {
             local apk="$1"
             local count
-            count=$(unzip -Z1 "$apk" | grep -E '^assets/brawler_icons/[^/]+\.png$' | wc -l)
+            count="$(unzip -Z1 "$apk" | grep -E '^assets/brawler_icons/[^/]+\.png$' | wc -l)"
             echo "$apk -> $count/108 brawler icons"
             test "$count" -eq 108
-            while IFS= read -r id; do
+
+            while IFS= read -r raw_id; do
+              id="$(printf '%s' "$raw_id" | tr -d '\r' | xargs)"
+              [[ -n "$id" ]] || continue
               unzip -Z1 "$apk" | grep -Fxq "assets/brawler_icons/${id}.png"
             done < app/src/main/assets/brawler_icons_manifest.txt
           }
@@ -142,11 +349,13 @@ jobs:
           verify_apk "$DEBUG_APK"
           verify_apk "$RELEASE_APK"
 
+          echo "APK asset verification passed."
+
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
           name: RostikTouchBot-v30.14-apks
           if-no-files-found: error
           path: |
-            app/build/outputs/apk/debug/*.apk
-            app/build/outputs/apk/release/*.apk
+            ${{ env.PROJECT_ROOT }}/app/build/outputs/apk/debug/*.apk
+            ${{ env.PROJECT_ROOT }}/app/build/outputs/apk/release/*.apk
