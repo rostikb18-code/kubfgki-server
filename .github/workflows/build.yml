@@ -12,6 +12,9 @@ concurrency:
   group: rostik-touch-bot-build-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  SOURCE_DIR: v30src
+
 jobs:
   build:
     name: Android build
@@ -21,10 +24,80 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Locate or extract project source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf "$SOURCE_DIR"
+
+          if [ -f "settings.gradle.kts" ] && [ -f "app/build.gradle.kts" ]; then
+            echo "Project source is already in repository root."
+            mkdir -p "$SOURCE_DIR"
+            shopt -s dotglob nullglob
+            for item in *; do
+              [ "$item" = "$SOURCE_DIR" ] && continue
+              [ "$item" = ".git" ] && continue
+              mv "$item" "$SOURCE_DIR/"
+            done
+            shopt -u dotglob nullglob
+          else
+            ZIP=""
+            for candidate in \
+              "RostikTouchBot-v30.11-GITHUB-READY.zip" \
+              "RostikTouchBot-v30.11-SOURCE.zip" \
+              "source/RostikTouchBot-v30.11-GITHUB-READY.zip" \
+              "source/RostikTouchBot-v30.11-SOURCE.zip"; do
+              if [ -f "$candidate" ]; then ZIP="$candidate"; break; fi
+            done
+
+            if [ -z "$ZIP" ]; then
+              ZIP="$(find . -maxdepth 3 -type f -iname '*.zip' -print -quit || true)"
+            fi
+
+            if [ -z "$ZIP" ]; then
+              echo "ERROR: Rostik Touch Bot source was not found."
+              echo "Either upload the extracted project to the repository root,"
+              echo "or upload RostikTouchBot-v30.11-GITHUB-READY.zip."
+              echo "Repository files:"
+              find . -maxdepth 3 -type f -not -path './.git/*' | sort | head -250
+              exit 1
+            fi
+
+            echo "Using source archive: $ZIP"
+            mkdir -p "$SOURCE_DIR"
+            unzip -q "$ZIP" -d "$SOURCE_DIR/unpacked"
+
+            # Accept either a flat archive or one top-level project directory.
+            if [ -f "$SOURCE_DIR/unpacked/settings.gradle.kts" ]; then
+              shopt -s dotglob nullglob
+              for item in "$SOURCE_DIR/unpacked"/*; do
+                mv "$item" "$SOURCE_DIR/"
+              done
+              rmdir "$SOURCE_DIR/unpacked"
+              shopt -u dotglob nullglob
+            else
+              PROJECT_ROOT="$(find "$SOURCE_DIR/unpacked" -mindepth 1 -maxdepth 1 -type d -print -quit || true)"
+              if [ -n "$PROJECT_ROOT" ] && [ -f "$PROJECT_ROOT/settings.gradle.kts" ]; then
+                shopt -s dotglob nullglob
+                for item in "$PROJECT_ROOT"/*; do
+                  mv "$item" "$SOURCE_DIR/"
+                done
+                rm -rf "$SOURCE_DIR/unpacked"
+                shopt -u dotglob nullglob
+              else
+                echo "ERROR: ZIP does not contain a valid Gradle project root."
+                find "$SOURCE_DIR/unpacked" -maxdepth 3 -print | head -250
+                exit 1
+              fi
+            fi
+          fi
+
       - name: Verify project structure
         shell: bash
         run: |
           set -euo pipefail
+          cd "$SOURCE_DIR"
           test -f settings.gradle.kts
           test -f build.gradle.kts
           test -f gradle.properties
@@ -32,7 +105,7 @@ jobs:
           test -f app/src/main/AndroidManifest.xml
           test -d app/src/main/java
           test -d app/src/main/assets
-          test -d .github/workflows
+          test -f app/src/main/assets/reference/brawl_ball_lobby.png
           echo "Project root OK"
           echo "Kotlin source files: $(find app/src/main/java -type f -name '*.kt' | wc -l)"
           echo "Asset files: $(find app/src/main/assets -type f | wc -l)"
@@ -53,6 +126,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle 8.10.2
@@ -62,28 +136,31 @@ jobs:
           cache-read-only: false
 
       - name: Show tool versions
-        shell: bash
         run: |
           java -version
           gradle --version
-          sdkmanager --list_installed | sed -n '1,80p'
+          cd "$SOURCE_DIR"
+          gradle --version
 
       - name: Gradle configuration check
+        working-directory: ${{ env.SOURCE_DIR }}
         run: gradle tasks --stacktrace --no-daemon
 
       - name: Build debug APK
+        working-directory: ${{ env.SOURCE_DIR }}
         run: gradle :app:assembleDebug --stacktrace --no-daemon
 
       - name: Build release APK
+        working-directory: ${{ env.SOURCE_DIR }}
         run: gradle :app:assembleRelease --stacktrace --no-daemon
 
       - name: Verify APK outputs
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$(find app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)"
-          test -n "$(find app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
-          find app/build/outputs/apk -type f -name '*.apk' -print
+          test -n "$(find "$SOURCE_DIR/app/build/outputs/apk/debug" -type f -name '*.apk' -print -quit)"
+          test -n "$(find "$SOURCE_DIR/app/build/outputs/apk/release" -type f -name '*.apk' -print -quit)"
+          find "$SOURCE_DIR/app/build/outputs/apk" -type f -name '*.apk' -print
 
       - name: Upload APKs
         uses: actions/upload-artifact@v4
@@ -91,5 +168,5 @@ jobs:
           name: RostikTouchBot-v30.11-apks
           if-no-files-found: error
           path: |
-            app/build/outputs/apk/debug/*.apk
-            app/build/outputs/apk/release/*.apk
+            ${{ env.SOURCE_DIR }}/app/build/outputs/apk/debug/*.apk
+            ${{ env.SOURCE_DIR }}/app/build/outputs/apk/release/*.apk
