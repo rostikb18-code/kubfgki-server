@@ -21,27 +21,108 @@ env:
 
 jobs:
   build:
-    name: Discover, verify and build Android project
+    name: Auto-extract, discover, verify and build Android project
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # IMPORTANT:
-      # The GitHub repository may contain the Android project at:
-      #   ./
-      #   ./source/
-      #   ./v30src/
-      # or another nested directory.
-      # We discover it ONCE and every following step uses PROJECT_ROOT.
-      # No check below assumes that the repository root is the Android root.
+      # The repository is allowed to contain ONLY the workflow + project ZIP.
+      # If a real Android project is not already present, this step finds the
+      # best RostikTouchBot ZIP and extracts it automatically.
+      - name: Prepare Android project from repository or ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REPO_ROOT="$GITHUB_WORKSPACE"
+          cd "$REPO_ROOT"
+
+          has_project() {
+            local d="$1"
+            [[ -f "$d/settings.gradle.kts" || -f "$d/settings.gradle" ]] || return 1
+            [[ -f "$d/app/build.gradle.kts" || -f "$d/app/build.gradle" ]] || return 1
+            [[ -f "$d/app/src/main/AndroidManifest.xml" ]] || return 1
+            return 0
+          }
+
+          if has_project "$REPO_ROOT" || has_project "$REPO_ROOT/source" || has_project "$REPO_ROOT/v30src"; then
+            echo "An Android project is already present; no ZIP extraction required."
+            exit 0
+          fi
+
+          mkdir -p "$REPO_ROOT/.ci/extracted"
+
+          BEST_ZIP=""
+          BEST_SCORE=-1
+
+          while IFS= read -r -d '' zip; do
+            echo "Inspecting ZIP: $zip"
+            score=0
+
+            # A valid project ZIP must contain the three core files somewhere.
+            unzip -Z1 "$zip" > "$REPO_ROOT/.ci/zip-list.txt"
+
+            grep -Eq '(^|/)settings\.gradle(\.kts)?$' "$REPO_ROOT/.ci/zip-list.txt" && score=$((score+20))
+            grep -Eq '(^|/)app/build\.gradle(\.kts)?$' "$REPO_ROOT/.ci/zip-list.txt" && score=$((score+20))
+            grep -Eq '(^|/)app/src/main/AndroidManifest\.xml$' "$REPO_ROOT/.ci/zip-list.txt" && score=$((score+20))
+            grep -Eq '(^|/)app/src/main/assets/brawler_icons_manifest\.txt$' "$REPO_ROOT/.ci/zip-list.txt" && score=$((score+20))
+
+            icon_count="$(grep -Ec '^(.*/)?app/src/main/assets/brawler_icons/[^/]+\.png$' "$REPO_ROOT/.ci/zip-list.txt" || true)"
+            [[ "$icon_count" -eq 108 ]] && score=$((score+100))
+
+            # Prefer RostikTouchBot project archives if several ZIPs exist.
+            case "$(basename "$zip")" in
+              *RostikTouchBot*|*rostik*|*ROSTIK*) score=$((score+10)) ;;
+            esac
+
+            echo "  score=$score icons=$icon_count"
+
+            if (( score > BEST_SCORE )); then
+              BEST_ZIP="$zip"
+              BEST_SCORE="$score"
+            fi
+          done < <(find "$REPO_ROOT" -maxdepth 3 -type f -iname '*.zip' -print0 | sort -z)
+
+          if [[ -z "$BEST_ZIP" || "$BEST_SCORE" -lt 60 ]]; then
+            echo "ERROR: No usable Android project or project ZIP was found."
+            echo
+            echo "Expected either an Android project containing:"
+            echo "  settings.gradle(.kts)"
+            echo "  app/build.gradle(.kts)"
+            echo "  app/src/main/AndroidManifest.xml"
+            echo
+            echo "or a ZIP containing those files."
+            echo
+            echo "Repository files:"
+            find "$REPO_ROOT" -maxdepth 5 -type f \
+              -not -path '*/.git/*' \
+              -not -path '*/.gradle/*' \
+              -not -path '*/.ci/*' \
+              | sort | head -300
+            exit 1
+          fi
+
+          echo "Selected project ZIP: $BEST_ZIP"
+          echo "ZIP score: $BEST_SCORE"
+
+          rm -rf "$REPO_ROOT/.ci/extracted/project"
+          mkdir -p "$REPO_ROOT/.ci/extracted/project"
+          unzip -q "$BEST_ZIP" -d "$REPO_ROOT/.ci/extracted/project"
+
+          echo "ZIP extracted successfully."
+          find "$REPO_ROOT/.ci/extracted/project" -maxdepth 5 -type f \
+            -not -path '*/.gradle/*' \
+            -not -path '*/build/*' \
+            | sort | head -150
+
       - name: Discover Android project root
         shell: bash
         run: |
           set -euo pipefail
 
-          REPO_ROOT="$(git rev-parse --show-toplevel)"
+          REPO_ROOT="$GITHUB_WORKSPACE"
           cd "$REPO_ROOT"
 
           declare -a CANDIDATES=()
@@ -60,13 +141,10 @@ jobs:
             CANDIDATES+=("$d")
           }
 
-          # Fast-path the locations most commonly used by this project.
           add_candidate "$REPO_ROOT"
           add_candidate "$REPO_ROOT/source"
           add_candidate "$REPO_ROOT/v30src"
 
-          # Also discover nested Android projects. Do not enter .git, Gradle
-          # caches, build outputs, node_modules, or generated directories.
           while IFS= read -r -d '' settings_file; do
             add_candidate "$(dirname "$settings_file")"
           done < <(
@@ -81,18 +159,8 @@ jobs:
           )
 
           if (( ${#CANDIDATES[@]} == 0 )); then
-            echo "ERROR: No Android Gradle project was found."
-            echo "Required files in the same directory:"
-            echo "  settings.gradle(.kts)"
-            echo "  app/build.gradle(.kts)"
-            echo "  app/src/main/AndroidManifest.xml"
-            echo
-            echo "Repository tree (first 250 files):"
-            find "$REPO_ROOT" -maxdepth 5 -type f \
-              -not -path '*/.git/*' \
-              -not -path '*/.gradle/*' \
-              -not -path '*/build/*' \
-              | sort | head -250
+            echo "ERROR: ZIP was extracted, but no Android Gradle project was found inside it."
+            echo "The archive must contain settings.gradle(.kts), app/build.gradle(.kts), and app/src/main/AndroidManifest.xml."
             exit 1
           fi
 
@@ -102,19 +170,14 @@ jobs:
             local icon_count=0
             local manifest_count=0
 
-            # Core Android/Gradle project files.
             [[ -f "$d/settings.gradle.kts" ]] && score=$((score+3))
             [[ -f "$d/settings.gradle" ]] && score=$((score+2))
             [[ -f "$d/build.gradle.kts" ]] && score=$((score+2))
             [[ -f "$d/build.gradle" ]] && score=$((score+2))
             [[ -f "$d/gradle.properties" ]] && score=$((score+1))
             [[ -d "$d/gradle" ]] && score=$((score+1))
-
-            # Kotlin/Java source directory: accept either layout.
             [[ -d "$d/app/src/main/kotlin" ]] && score=$((score+3))
             [[ -d "$d/app/src/main/java" ]] && score=$((score+3))
-
-            # This project specifically requires the brawler assets.
             [[ -d "$d/app/src/main/assets" ]] && score=$((score+5))
             [[ -d "$d/app/src/main/assets/brawler_icons" ]] && score=$((score+8))
             [[ -f "$d/app/src/main/assets/brawler_icons_manifest.txt" ]] && score=$((score+8))
@@ -130,18 +193,13 @@ jobs:
               [[ "$manifest_count" -eq 108 ]] && score=$((score+20))
             fi
 
-            # Prefer the known legacy locations only as a final tie-breaker.
-            case "$d" in
-              "$REPO_ROOT") score=$((score+2)) ;;
-              "$REPO_ROOT/source") score=$((score+1)) ;;
-            esac
-
             printf '%s' "$score"
           }
 
           BEST=""
           BEST_SCORE=-1
-          echo "Discovered candidates:"
+
+          echo "Discovered Android candidates:"
           for d in "${CANDIDATES[@]}"; do
             score="$(score_candidate "$d")"
             printf '  score=%-3s %s\n' "$score" "$d"
@@ -150,7 +208,6 @@ jobs:
               BEST="$d"
               BEST_SCORE="$score"
             elif (( score == BEST_SCORE )); then
-              # Stable tie-breaker: shorter path, then lexical order.
               best_len=${#BEST}
               d_len=${#d}
               if (( d_len < best_len )) || { (( d_len == best_len )) && [[ "$d" < "$BEST" ]]; }; then
@@ -187,8 +244,7 @@ jobs:
           test -d app/src/main/assets
           test -d app/src/main/assets/brawler_icons
 
-          echo "Using Android project root: $PROJECT_ROOT"
-          echo "Repository may contain source/, v30src/, or other unrelated directories; they are ignored."
+          echo "Android project root: $PROJECT_ROOT"
 
       - name: Verify Gradle module wiring
         shell: bash
@@ -207,8 +263,6 @@ jobs:
             echo "ERROR: Kotlin plugin was not found in $APP_BUILD"
             exit 1
           }
-
-          echo "Gradle root -> :app wiring is present."
 
       - name: Verify 108 brawler assets and references
         shell: bash
@@ -236,34 +290,19 @@ jobs:
           while IFS= read -r raw_id; do
             id="$(printf '%s' "$raw_id" | tr -d '\r' | xargs)"
             [[ -n "$id" ]] || continue
-            [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || {
-              echo "ERROR: Invalid brawler id in manifest: '$id'"
-              exit 1
-            }
-            [[ -z "${SEEN[$id]+x}" ]] || {
-              echo "ERROR: Duplicate brawler id in manifest: $id"
-              exit 1
-            }
+            [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid brawler id: $id"; exit 1; }
+            [[ -z "${SEEN[$id]+x}" ]] || { echo "Duplicate brawler id: $id"; exit 1; }
             SEEN[$id]=1
-            test -f "$ICONS/${id}.png" || {
-              echo "ERROR: Missing icon: $ICONS/${id}.png"
-              exit 1
-            }
+            test -f "$ICONS/${id}.png" || { echo "Missing icon: ${id}.png"; exit 1; }
           done < "$MANIFEST"
 
-          # Every PNG must be represented in the manifest too.
           while IFS= read -r -d '' png; do
             id="$(basename "$png" .png)"
-            [[ -n "${SEEN[$id]+x}" ]] || {
-              echo "ERROR: PNG is not listed in manifest: $id.png"
-              exit 1
-            }
+            [[ -n "${SEEN[$id]+x}" ]] || { echo "PNG not listed in manifest: $id.png"; exit 1; }
           done < <(find "$ICONS" -maxdepth 1 -type f -name '*.png' -print0)
 
-          # Brawl Ball reference is required by the runtime if present in this release.
           test -f "$ASSETS/reference/brawl_ball_lobby.png"
-
-          echo "All 108 brawler icons, manifest entries, and Brawl Ball reference are valid."
+          echo "108 brawlers + manifest + Brawl Ball reference: OK"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -290,15 +329,13 @@ jobs:
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
 
-      - name: Verify Gradle sees the discovered project and :app
+      - name: Verify Gradle sees :app
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_ROOT"
-          PROJECTS="$(gradle -q projects --no-daemon)"
-          printf '%s\n' "$PROJECTS"
-          printf '%s\n' "$PROJECTS" | grep -Fq "Project ':app'"
-          echo "Gradle sees :app from: $PROJECT_ROOT"
+          gradle -q projects --no-daemon
+          gradle -q projects --no-daemon | grep -Fq "Project ':app'"
 
       - name: Gradle configuration check
         shell: bash
@@ -348,8 +385,6 @@ jobs:
 
           verify_apk "$DEBUG_APK"
           verify_apk "$RELEASE_APK"
-
-          echo "APK asset verification passed."
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
