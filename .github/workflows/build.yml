@@ -257,7 +257,7 @@ jobs:
           APP_BUILD="app/build.gradle.kts"
           [[ -f "$APP_BUILD" ]] || APP_BUILD="app/build.gradle"
 
-          grep -Eq 'include[[:space:]]*\([[:space:]]*["'"']?:app["'"']?[[:space:]]*\)' "$SETTINGS"
+          grep -Eq "include[[:space:]]*\([[:space:]]*[\"']?:app[\"']?[[:space:]]*\)" "$SETTINGS"
           grep -Eq 'com\.android\.application' "$APP_BUILD"
           grep -Eq 'org\.jetbrains\.kotlin\.android|org\.jetbrains\.kotlin\.jvm' "$APP_BUILD" || {
             echo "ERROR: Kotlin plugin was not found in $APP_BUILD"
