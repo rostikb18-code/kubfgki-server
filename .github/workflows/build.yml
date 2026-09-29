@@ -1,4 +1,4 @@
-name: Build Rostik Touch Bot v30.9.2 Stable
+name: Build Rostik Touch Bot v30.9.3 Stable
 
 on:
   workflow_dispatch:
@@ -156,7 +156,7 @@ jobs:
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: RostikTouchBot-v30.9.2-APKs
+          name: RostikTouchBot-v30.9.3-APKs
           if-no-files-found: error
           path: |
             ${{ env.PROJECT_ROOT }}/app/build/outputs/apk/debug/app-debug.apk
