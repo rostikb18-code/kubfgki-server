@@ -138,20 +138,53 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # GitHub-hosted Ubuntu runners already contain the Android SDK.
+      # Do not use android-actions/setup-android here because it can
+      # attempt to resolve the obsolete SDK "tools" package.
+      - name: Configure Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ANDROID_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+
+          if [ ! -d "$ANDROID_DIR" ]; then
+            echo "::error::Android SDK was not found at $ANDROID_DIR"
+            exit 1
+          fi
+
+          echo "ANDROID_HOME=$ANDROID_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_DIR" >> "$GITHUB_ENV"
+          echo "$ANDROID_DIR/platform-tools" >> "$GITHUB_PATH"
+
+          SDKMANAGER=""
+          if [ -x "$ANDROID_DIR/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$ANDROID_DIR/cmdline-tools/latest/bin/sdkmanager"
+          else
+            SDKMANAGER="$(find "$ANDROID_DIR/cmdline-tools" -type f -name sdkmanager -executable 2>/dev/null | sort -V | tail -n 1 || true)"
+          fi
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager was not found in the preinstalled Android SDK."
+            find "$ANDROID_DIR/cmdline-tools" -maxdepth 4 -type f -name sdkmanager -print 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          "$SDKMANAGER" --version
 
       - name: Install Android SDK components
         shell: bash
         run: |
           set -euo pipefail
 
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          # Install only the packages required by the project.
+          # No obsolete SDK tools package and no --no_https workaround.
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
 
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+          "$SDKMANAGER"             "platform-tools"             "platforms;android-35"             "build-tools;35.0.0"
+
+          "$SDKMANAGER" --list_installed | sed -n '1,160p'
 
       # If the ZIP project contains gradlew, use it.
       # If it does not, install Gradle automatically and use that instead.
