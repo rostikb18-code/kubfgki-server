@@ -21,34 +21,140 @@ jobs:
       - name: "1. Checkout"
         uses: actions/checkout@v4
 
-      - name: "0. Assemble source from GitHub ZIP parts when needed"
+      - name: "0. Assemble and verify v31.1.3 source ZIP parts"
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -f settings.gradle.kts && -f app/build.gradle.kts ]]; then
-            echo "Project files already exist at repository root."
-            exit 0
-          fi
 
-          mapfile -t PARTS < <(find . -maxdepth 1 -type f \
-            \( -name 'RostikAI-v31.1.3-COMPILE-FIX-PART-*.zip' -o -name 'RostikAI-v31.1.3-DISCORD-PART-*.zip' -o -name 'RostikAI-v31.1.2-DISCORD-PART-*.zip' \) | sort)
-          if (( ${#PARTS[@]} == 0 )); then
-            echo "ERROR: Android project is missing and no RostikAI source ZIP parts were found."
+          PART_DIR=".rostik_parts"
+          rm -rf "$PART_DIR" .rostik_assembled
+          mkdir -p "$PART_DIR" .rostik_assembled
+
+          # Accept the two published four-part naming schemes, but never mix them.
+          UPDATED_PREFIX="RostikAI-v31.1.3-PRO-QUALITY-UPDATED-PART-"
+          PRO_PREFIX="RostikAI-v31.1.3-PRO-QUALITY-PART-"
+          FIX_PREFIX="RostikAI-v31.1.3-COMPILE-FIX-PART-"
+
+          declare -A UPDATED_SHA=(
+            [01]="c69cc642683411c0cba8d77659e8a7037f3ec1c561022402a2f6655d5a273ea6"
+            [02]="796b9ad666fde7d790fe003d86cc12006671df1ddda0dc641e8be6bfd4b23f53"
+            [03]="56ef00605e95f6f93fee7b8530655ace3ac257e4beaeee41bd406069f6a41c96"
+            [04]="20f1725b4c000d7ece2076b708659c4a3f6ee8148a5df1e4f888977c5d39ff11"
+          )
+          declare -A PRO_SHA=(
+            [01]="fb70860fbfab18f62200ef517fdc45e6063149016672e53ea850f725e516d56e"
+            [02]="16fb0b97ed2794e020c4f2ce2cbdd0fbec0ffcc8fb44e6af5ad9b6fb2c2da475"
+            [03]="9b4cf99fdb05c26871d7cb7b96038290a11013e204c83ca7c9c5c23fab238ad6"
+            [04]="55cf763ff14c8f97a632e89f4d6a43cc9c83a8faf39cad88dd72a520d42566c1"
+          )
+          declare -A FIX_SHA=(
+            [01]="f5446b7dda0959741605183dbbd3a31379838aa8f1be2f9d97a32c09a8324a85"
+            [02]="69255aef193c3f727fbc7ad1e684d7a46994e3d4e8a398d1fd364a554302ced2"
+            [03]="0acd448d1f2c3c743b71324f91c55e368c0b0a424d07f9b9ce63954385d501c1"
+            [04]="dd28e888817254f7a20474b7270e20340c556739ad56306fb3732711dfc75522"
+          )
+
+          updated_count=0
+          pro_count=0
+          fix_count=0
+          for n in 01 02 03 04; do
+            [[ -f "${UPDATED_PREFIX}${n}.zip" ]] && updated_count=$((updated_count+1))
+            [[ -f "${PRO_PREFIX}${n}.zip" ]] && pro_count=$((pro_count+1))
+            [[ -f "${FIX_PREFIX}${n}.zip" ]] && fix_count=$((fix_count+1))
+          done
+
+          families_present=0
+          [[ "$updated_count" -gt 0 ]] && families_present=$((families_present+1))
+          [[ "$pro_count" -gt 0 ]] && families_present=$((families_present+1))
+          [[ "$fix_count" -gt 0 ]] && families_present=$((families_present+1))
+          if [[ "$families_present" -gt 1 ]]; then
+            echo "ERROR: mixed source ZIP families are not allowed."
             exit 1
           fi
-          echo "Found ${#PARTS[@]} source ZIP part(s)."
-          rm -rf .rostik_assembled
-          mkdir -p .rostik_assembled
-          for part in "${PARTS[@]}"; do
-            echo "Extracting $part"
-            unzip -q -o "$part" -d .rostik_assembled
-          done
-          cp -a .rostik_assembled/. ./
-          rm -rf .rostik_assembled
-          test -f settings.gradle.kts
-          test -f app/build.gradle.kts
-          test -f app/src/main/AndroidManifest.xml
-          echo "Source assembly complete."
+
+          if [[ "$updated_count" -eq 4 || "$pro_count" -eq 4 || "$fix_count" -eq 4 ]]; then
+            if [[ "$updated_count" -eq 4 ]]; then
+              FAMILY="PRO-QUALITY-UPDATED"
+              PREFIX="$UPDATED_PREFIX"
+              declare -n EXPECTED_SHA=UPDATED_SHA
+            elif [[ "$pro_count" -eq 4 ]]; then
+              FAMILY="PRO-QUALITY"
+              PREFIX="$PRO_PREFIX"
+              declare -n EXPECTED_SHA=PRO_SHA
+            else
+              FAMILY="COMPILE-FIX"
+              PREFIX="$FIX_PREFIX"
+              declare -n EXPECTED_SHA=FIX_SHA
+            fi
+
+            echo "Using complete $FAMILY four-part source set."
+            for n in 01 02 03 04; do
+              zipfile="${PREFIX}${n}.zip"
+              cp -f "$zipfile" "$PART_DIR/$zipfile"
+              actual="$(sha256sum "$zipfile" | awk '{print $1}')"
+              expected="${EXPECTED_SHA[$n]}"
+              [[ "$actual" == "$expected" ]] || {
+                echo "ERROR: SHA-256 mismatch for $zipfile"
+                echo "expected=$expected"
+                echo "actual=$actual"
+                exit 1
+              }
+              echo "SHA-256 OK: $zipfile"
+              unzip -tq "$zipfile"
+            done
+
+            # Reject duplicate file paths across parts before extraction. Silent overwrite
+            # would make a split source non-deterministic.
+            python3 - "$PART_DIR" <<'PY'
+          import sys, zipfile
+          from pathlib import Path
+          root=Path(sys.argv[1])
+          seen={}
+          for zpath in sorted(root.glob('*.zip')):
+              with zipfile.ZipFile(zpath) as z:
+                  for name in z.namelist():
+                      if name.endswith('/'):
+                          continue
+                      if name in seen:
+                          raise SystemExit(f"duplicate archive path across parts: {name} ({seen[name]} and {zpath.name})")
+                      seen[name]=zpath.name
+          print(f"archive path uniqueness OK: {len(seen)} files")
+          PY
+
+            for n in 01 02 03 04; do
+              unzip -q "${PART_DIR}/${PREFIX}${n}.zip" -d .rostik_assembled
+            done
+
+            # The ZIP parts are source packages, not GitHub workflow state. Their extracted
+            # workflow is checked below; the workflow currently executing remains authoritative.
+            rm -rf app gradle
+            rm -f settings.gradle.kts build.gradle.kts gradle.properties gradlew gradlew.bat ROSTIK_SOURCE_ID.txt VERIFICATION_REPORT.md tools/verify_source.py
+            cp -a .rostik_assembled/. ./
+
+            test -f settings.gradle.kts
+            test -f build.gradle.kts
+            test -f app/build.gradle.kts
+            test -f app/src/main/AndroidManifest.xml
+            test -f ROSTIK_SOURCE_ID.txt
+            test -f tools/verify_source.py
+            test -f .github/workflows/build.yml
+          elif [[ "$pro_count" -ne 0 || "$fix_count" -ne 0 ]]; then
+            echo "ERROR: incomplete ZIP source set. Exactly all four parts are required."
+            echo "PRO-QUALITY-UPDATED parts found: $updated_count/4"
+            echo "PRO-QUALITY parts found: $pro_count/4"
+            echo "COMPILE-FIX parts found: $fix_count/4"
+            exit 1
+          elif [[ -f ROSTIK_SOURCE_ID.txt && -f settings.gradle.kts && -f app/build.gradle.kts ]]; then
+            echo "No source ZIP parts found; using repository source directly."
+          else
+            echo "ERROR: Android source is missing and no complete four-part source set was found."
+            exit 1
+          fi
+
+          echo "Source identity:"
+          cat ROSTIK_SOURCE_ID.txt
+          grep -qx 'ROSTIKAI-31.1.3-COMPILE-FIX-2' ROSTIK_SOURCE_ID.txt
+          echo "Source assembly/identity check passed."
 
       - name: "Discord - build started"
         continue-on-error: true
@@ -112,6 +218,12 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: "5.5. Deterministic source preflight"
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/verify_source.py
 
       - name: "6. Verify Android project structure"
         shell: bash
@@ -225,6 +337,8 @@ jobs:
           test "$(find app/src/main/assets/apk_port/models -type f -name '*.bin' -printf '%f\n' | sort | tr '\n' ' ')" = "m0.bin m1.bin m2.bin "
           grep -q 'versionCode = 54' app/build.gradle.kts
           grep -q 'versionName = "31.1.3"' app/build.gradle.kts
+          test -f ROSTIK_SOURCE_ID.txt
+          grep -qx 'ROSTIKAI-31.1.3-COMPILE-FIX-2' ROSTIK_SOURCE_ID.txt
           grep -q 'buildConfig = true' app/build.gradle.kts
           grep -q 'import com.rostik.touchbot.BuildConfig' app/src/main/java/com/rostik/touchbot/DiscordLogger.kt
           ! grep -RIn --exclude-dir=build 'ball\.confidence' app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
@@ -251,6 +365,8 @@ jobs:
           set -euo pipefail
           grep -q 'override fun onBind(intent: Intent?): IBinder? = null' app/src/main/java/com/rostik/touchbot/OverlayService.kt
           ! grep -n 'ball\.confidence' app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
+          ! grep -n 'tap=brawlers.*target\.confidence' app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
+          grep -qx 'ROSTIKAI-31.1.3-COMPILE-FIX-2' ROSTIK_SOURCE_ID.txt
           echo "Kotlin compile preflight passed"
 
       - id: compile_debug
@@ -259,17 +375,22 @@ jobs:
         run: gradle --no-daemon --stacktrace :app:compileDebugKotlin
 
       - id: compile_release
-        name: "15. Compile Release Kotlin"
+        name: "16. Compile Release Kotlin"
         shell: bash
         run: gradle --no-daemon --stacktrace :app:compileReleaseKotlin
 
+      - id: lint_debug
+        name: "15. Lint Debug"
+        shell: bash
+        run: gradle --no-daemon --stacktrace :app:lintDebug
+
       - id: build_debug
-        name: "16. Build Debug APK"
+        name: "17. Build Debug APK"
         shell: bash
         run: gradle --no-daemon --stacktrace :app:assembleDebug
 
       - id: verify_debug
-        name: "17. Verify Debug APK"
+        name: "18. Verify Debug APK"
         shell: bash
         run: |
           set -euo pipefail
@@ -291,12 +412,12 @@ jobs:
           PY2
 
       - id: build_release
-        name: "18. Build Release APK"
+        name: "19. Build Release APK"
         shell: bash
         run: gradle --no-daemon --stacktrace :app:assembleRelease
 
       - id: verify_release
-        name: "19. Verify Release APK"
+        name: "20. Verify Release APK"
         shell: bash
         run: |
           set -euo pipefail
@@ -327,7 +448,7 @@ jobs:
           print('Release APK contains all 108 avatar mappings/fallbacks')
           PY2
 
-      - name: "20. Upload Debug + Release APKs"
+      - name: "21. Upload Debug + Release APKs"
         uses: actions/upload-artifact@v4
         with:
           name: RostikAI-v31.1.3-APKs
@@ -363,6 +484,7 @@ jobs:
                 {"name": "run", "value": os.environ.get("GITHUB_RUN_ID", "-"), "inline": True},
                 {"name": "compile_debug", "value": os.environ.get("STEP_COMPILE_DEBUG", "unknown"), "inline": True},
                 {"name": "compile_release", "value": os.environ.get("STEP_COMPILE_RELEASE", "unknown"), "inline": True},
+                {"name": "lint_debug", "value": os.environ.get("STEP_LINT_DEBUG", "unknown"), "inline": True},
                 {"name": "build_debug", "value": os.environ.get("STEP_BUILD_DEBUG", "unknown"), "inline": True},
                 {"name": "verify_debug", "value": os.environ.get("STEP_VERIFY_DEBUG", "unknown"), "inline": True},
                 {"name": "build_release", "value": os.environ.get("STEP_BUILD_RELEASE", "unknown"), "inline": True},
@@ -378,6 +500,7 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           STEP_COMPILE_DEBUG: ${{ steps.compile_debug.outcome }}
           STEP_COMPILE_RELEASE: ${{ steps.compile_release.outcome }}
+          STEP_LINT_DEBUG: ${{ steps.lint_debug.outcome }}
           STEP_BUILD_DEBUG: ${{ steps.build_debug.outcome }}
           STEP_VERIFY_DEBUG: ${{ steps.verify_debug.outcome }}
           STEP_BUILD_RELEASE: ${{ steps.build_release.outcome }}
