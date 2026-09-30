@@ -336,25 +336,60 @@ jobs:
           grep -qx 'ROSTIKAI-31.1.3-PYTHON-PORT-3' ROSTIK_SOURCE_ID.txt
           echo "Kotlin compile preflight passed"
 
-      - id: compile_debug
-        name: "14. Compile Debug Kotlin"
+      - name: "13.8. Prepare compiler diagnostics directory"
         shell: bash
-        run: gradle --no-daemon --stacktrace :app:compileDebugKotlin
+        run: |
+          set -euo pipefail
+          rm -rf ci-logs
+          mkdir -p ci-logs
+
+      - name: "13.9. Toolchain sanity"
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -version 2>&1 | tee ci-logs/java-version.log
+          gradle --version 2>&1 | tee ci-logs/gradle-version.log
+          echo "Kotlin/AGP compile will run through Gradle; standalone kotlinc is intentionally not used because AndroidX/Android SDK symbols are required."
+
+      - id: compile_debug
+        name: "14. Compile Debug Kotlin (full diagnostics)"
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon --console=plain --stacktrace --info --warning-mode=all :app:compileDebugKotlin 2>&1 | tee ci-logs/compileDebugKotlin.log
+          status=${PIPESTATUS[0]}
+          echo "compileDebugKotlin exit code: $status" | tee -a ci-logs/compileDebugKotlin.log
+          exit "$status"
 
       - id: compile_release
-        name: "16. Compile Release Kotlin"
+        name: "16. Compile Release Kotlin (full diagnostics)"
         shell: bash
-        run: gradle --no-daemon --stacktrace :app:compileReleaseKotlin
+        run: |
+          set -o pipefail
+          gradle --no-daemon --console=plain --stacktrace --info --warning-mode=all :app:compileReleaseKotlin 2>&1 | tee ci-logs/compileReleaseKotlin.log
+          status=${PIPESTATUS[0]}
+          echo "compileReleaseKotlin exit code: $status" | tee -a ci-logs/compileReleaseKotlin.log
+          exit "$status"
 
       - id: lint_debug
         name: "15. Lint Debug"
         shell: bash
-        run: gradle --no-daemon --stacktrace :app:lintDebug
+        run: |
+          set -o pipefail
+          gradle --no-daemon --console=plain --stacktrace :app:lintDebug 2>&1 | tee ci-logs/lintDebug.log
+          status=${PIPESTATUS[0]}
+          echo "lintDebug exit code: $status" | tee -a ci-logs/lintDebug.log
+          exit "$status"
 
       - id: build_debug
         name: "17. Build Debug APK"
         shell: bash
-        run: gradle --no-daemon --stacktrace :app:assembleDebug
+        run: |
+          set -o pipefail
+          gradle --no-daemon --console=plain --stacktrace :app:assembleDebug 2>&1 | tee ci-logs/assembleDebug.log
+          status=${PIPESTATUS[0]}
+          echo "assembleDebug exit code: $status" | tee -a ci-logs/assembleDebug.log
+          exit "$status"
 
       - id: verify_debug
         name: "18. Verify Debug APK"
@@ -381,7 +416,12 @@ jobs:
       - id: build_release
         name: "19. Build Release APK"
         shell: bash
-        run: gradle --no-daemon --stacktrace :app:assembleRelease
+        run: |
+          set -o pipefail
+          gradle --no-daemon --console=plain --stacktrace :app:assembleRelease 2>&1 | tee ci-logs/assembleRelease.log
+          status=${PIPESTATUS[0]}
+          echo "assembleRelease exit code: $status" | tee -a ci-logs/assembleRelease.log
+          exit "$status"
 
       - id: verify_release
         name: "20. Verify Release APK"
@@ -415,7 +455,18 @@ jobs:
           print('Release APK contains all 108 avatar mappings/fallbacks')
           PY2
 
-      - name: "21. Upload Debug + Release APKs"
+      - name: "21. Upload CI diagnostics"
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: RostikAI-v31.1.3-CI-diagnostics
+          if-no-files-found: warn
+          path: |
+            ci-logs/*.log
+            app/build/reports/**
+            app/build/outputs/logs/**
+
+      - name: "22. Upload Debug + Release APKs"
         uses: actions/upload-artifact@v7
         with:
           name: RostikAI-v31.1.3-APKs
