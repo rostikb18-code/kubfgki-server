@@ -404,14 +404,16 @@ jobs:
           status=${PIPESTATUS[0]}
           echo "exit=$status" | tee -a ci-logs/assembleRelease.log
           exit "$status"
-
-     - id: verify_release
+  
+- id: verify_release
   name: "15. Verify Release APK"
   shell: bash
   run: |
     set -euo pipefail
     APK=app/build/outputs/apk/release/app-release.apk
-    test -f "$APK" && echo "✓ APK создан: $APK"
+    test -f "$APK"
+    unzip -Z1 "$APK" | grep -q '^assets/apk_port/maps/brawl_ball_maps.json$' || echo "WARNING: maps not found"
+    echo "RELEASE_APK_BUILD_PASS: файл создан успешно"
 
       - name: "16. Upload Debug + Release APKs"
         uses: actions/upload-artifact@v7
