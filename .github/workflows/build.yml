@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
       ANDROID_PLATFORM: "35"
@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: "1. Checkout"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: "0. Assemble and verify v31.1.3 source ZIP parts"
         shell: bash
@@ -30,81 +30,38 @@ jobs:
           rm -rf "$PART_DIR" .rostik_assembled
           mkdir -p "$PART_DIR" .rostik_assembled
 
-          # Accept the two published four-part naming schemes, but never mix them.
-          UPDATED_PREFIX="RostikAI-v31.1.3-PRO-QUALITY-UPDATED-PART-"
-          PRO_PREFIX="RostikAI-v31.1.3-PRO-QUALITY-PART-"
-          FIX_PREFIX="RostikAI-v31.1.3-COMPILE-FIX-PART-"
-
-          declare -A UPDATED_SHA=(
-            [01]="c69cc642683411c0cba8d77659e8a7037f3ec1c561022402a2f6655d5a273ea6"
-            [02]="796b9ad666fde7d790fe003d86cc12006671df1ddda0dc641e8be6bfd4b23f53"
-            [03]="56ef00605e95f6f93fee7b8530655ace3ac257e4beaeee41bd406069f6a41c96"
-            [04]="20f1725b4c000d7ece2076b708659c4a3f6ee8148a5df1e4f888977c5d39ff11"
-          )
-          declare -A PRO_SHA=(
-            [01]="fb70860fbfab18f62200ef517fdc45e6063149016672e53ea850f725e516d56e"
-            [02]="16fb0b97ed2794e020c4f2ce2cbdd0fbec0ffcc8fb44e6af5ad9b6fb2c2da475"
-            [03]="9b4cf99fdb05c26871d7cb7b96038290a11013e204c83ca7c9c5c23fab238ad6"
-            [04]="55cf763ff14c8f97a632e89f4d6a43cc9c83a8faf39cad88dd72a520d42566c1"
-          )
-          declare -A FIX_SHA=(
-            [01]="f5446b7dda0959741605183dbbd3a31379838aa8f1be2f9d97a32c09a8324a85"
-            [02]="69255aef193c3f727fbc7ad1e684d7a46994e3d4e8a398d1fd364a554302ced2"
-            [03]="0acd448d1f2c3c743b71324f91c55e368c0b0a424d07f9b9ce63954385d501c1"
-            [04]="dd28e888817254f7a20474b7270e20340c556739ad56306fb3732711dfc75522"
+          # The current source package is PYTHON-PORT-3. The workflow itself is deliberately
+          # excluded from the four ZIPs so the SHA-256 pins are not self-referential.
+          PYTHON_PREFIX="RostikAI-v31.1.3-PYTHON-PORT-3-PART-"
+          declare -A PYTHON_SHA=(
+            [01]="9f7be554015fa75897dbbba88174a762625fe250310db33df1b8861d499f3c7f"
+            [02]="a531f9993b9c3c90ace4f4dfc6cce8427093f3339c2ddebca836223435df5923"
+            [03]="5ca6c46dd91b0cac376e94ad6895d60ffaba01999721bd7eb9d5d0d2b9aea5cb"
+            [04]="1e4938e653ae1662a3c51fb84c971cb5482d4e5c2e5f4e144ac04af0134d7174"
           )
 
-          updated_count=0
-          pro_count=0
-          fix_count=0
+          python_count=0
           for n in 01 02 03 04; do
-            [[ -f "${UPDATED_PREFIX}${n}.zip" ]] && updated_count=$((updated_count+1))
-            [[ -f "${PRO_PREFIX}${n}.zip" ]] && pro_count=$((pro_count+1))
-            [[ -f "${FIX_PREFIX}${n}.zip" ]] && fix_count=$((fix_count+1))
+            [[ -f "${PYTHON_PREFIX}${n}.zip" ]] && python_count=$((python_count+1))
           done
 
-          families_present=0
-          [[ "$updated_count" -gt 0 ]] && families_present=$((families_present+1))
-          [[ "$pro_count" -gt 0 ]] && families_present=$((families_present+1))
-          [[ "$fix_count" -gt 0 ]] && families_present=$((families_present+1))
-          if [[ "$families_present" -gt 1 ]]; then
-            echo "ERROR: mixed source ZIP families are not allowed."
-            exit 1
-          fi
-
-          if [[ "$updated_count" -eq 4 || "$pro_count" -eq 4 || "$fix_count" -eq 4 ]]; then
-            if [[ "$updated_count" -eq 4 ]]; then
-              FAMILY="PRO-QUALITY-UPDATED"
-              PREFIX="$UPDATED_PREFIX"
-              declare -n EXPECTED_SHA=UPDATED_SHA
-            elif [[ "$pro_count" -eq 4 ]]; then
-              FAMILY="PRO-QUALITY"
-              PREFIX="$PRO_PREFIX"
-              declare -n EXPECTED_SHA=PRO_SHA
-            else
-              FAMILY="COMPILE-FIX"
-              PREFIX="$FIX_PREFIX"
-              declare -n EXPECTED_SHA=FIX_SHA
-            fi
-
-            echo "Using complete $FAMILY four-part source set."
+          if [[ "$python_count" -eq 4 ]]; then
+            echo "Using complete PYTHON-PORT-3 four-part source set."
             for n in 01 02 03 04; do
-              zipfile="${PREFIX}${n}.zip"
+              zipfile="${PYTHON_PREFIX}${n}.zip"
               cp -f "$zipfile" "$PART_DIR/$zipfile"
               actual="$(sha256sum "$zipfile" | awk '{print $1}')"
-              expected="${EXPECTED_SHA[$n]}"
+              expected="${PYTHON_SHA[$n]}"
               [[ "$actual" == "$expected" ]] || {
                 echo "ERROR: SHA-256 mismatch for $zipfile"
                 echo "expected=$expected"
                 echo "actual=$actual"
                 exit 1
               }
-              echo "SHA-256 OK: $zipfile"
               unzip -tq "$zipfile"
+              echo "SHA-256 OK: $zipfile"
             done
 
-            # Reject duplicate file paths across parts before extraction. Silent overwrite
-            # would make a split source non-deterministic.
             python3 - "$PART_DIR" <<'PY'
           import sys, zipfile
           from pathlib import Path
@@ -118,15 +75,15 @@ jobs:
                       if name in seen:
                           raise SystemExit(f"duplicate archive path across parts: {name} ({seen[name]} and {zpath.name})")
                       seen[name]=zpath.name
+          if '.github/workflows/build.yml' in seen:
+              raise SystemExit('workflow must remain standalone and must not be embedded in source parts')
           print(f"archive path uniqueness OK: {len(seen)} files")
           PY
 
             for n in 01 02 03 04; do
-              unzip -q "${PART_DIR}/${PREFIX}${n}.zip" -d .rostik_assembled
+              unzip -q "${PART_DIR}/${PYTHON_PREFIX}${n}.zip" -d .rostik_assembled
             done
 
-            # The ZIP parts are source packages, not GitHub workflow state. Their extracted
-            # workflow is checked below; the workflow currently executing remains authoritative.
             rm -rf app gradle
             rm -f settings.gradle.kts build.gradle.kts gradle.properties gradlew gradlew.bat ROSTIK_SOURCE_ID.txt VERIFICATION_REPORT.md tools/verify_source.py
             cp -a .rostik_assembled/. ./
@@ -138,22 +95,19 @@ jobs:
             test -f ROSTIK_SOURCE_ID.txt
             test -f tools/verify_source.py
             test -f .github/workflows/build.yml
-          elif [[ "$pro_count" -ne 0 || "$fix_count" -ne 0 ]]; then
-            echo "ERROR: incomplete ZIP source set. Exactly all four parts are required."
-            echo "PRO-QUALITY-UPDATED parts found: $updated_count/4"
-            echo "PRO-QUALITY parts found: $pro_count/4"
-            echo "COMPILE-FIX parts found: $fix_count/4"
+          elif [[ "$python_count" -ne 0 ]]; then
+            echo "ERROR: incomplete PYTHON-PORT-3 ZIP source set. Found $python_count/4 parts."
             exit 1
           elif [[ -f ROSTIK_SOURCE_ID.txt && -f settings.gradle.kts && -f app/build.gradle.kts ]]; then
             echo "No source ZIP parts found; using repository source directly."
           else
-            echo "ERROR: Android source is missing and no complete four-part source set was found."
+            echo "ERROR: Android source is missing and no complete PYTHON-PORT-3 four-part source set was found."
             exit 1
           fi
 
           echo "Source identity:"
           cat ROSTIK_SOURCE_ID.txt
-          grep -qx 'ROSTIKAI-31.1.3-COMPILE-FIX-2' ROSTIK_SOURCE_ID.txt
+          grep -qx 'ROSTIKAI-31.1.3-PYTHON-PORT-3' ROSTIK_SOURCE_ID.txt
           echo "Source assembly/identity check passed."
 
       - name: "Discord - build started"
@@ -188,7 +142,7 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
       - name: "2. Set up Java 17"
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
@@ -215,7 +169,7 @@ jobs:
           test -d "$ANDROID_SDK_ROOT/build-tools/${ANDROID_BUILD_TOOLS}"
 
       - name: "5. Set up Gradle"
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
 
@@ -237,6 +191,16 @@ jobs:
           test -f app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
           test -f app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt
           test -f app/src/main/java/com/rostik/touchbot/BotAccessibilityService.kt
+          test -f app/src/main/java/com/rostik/touchbot/TrophyObserver.kt
+          test -f app/src/main/java/com/rostik/touchbot/TrophyRules.kt
+          test -f app/src/main/java/com/rostik/touchbot/LegacyStateDetector.kt
+          test -f app/src/main/java/com/rostik/touchbot/BrawlStarsApiClient.kt
+          test -f app/src/main/java/com/rostik/touchbot/RuntimeMetrics.kt
+          test -f app/src/main/java/com/rostik/touchbot/RuntimeLog.kt
+          test -f app/src/main/java/com/rostik/touchbot/RecoveryEvents.kt
+          test -f app/src/main/java/com/rostik/touchbot/PerformanceProfile.kt
+          test -f app/src/main/java/com/rostik/touchbot/PerformanceAutoTuner.kt
+          test -f app/src/main/java/com/rostik/touchbot/PerfProfiler.kt
 
       - name: "7. Verify 108 brawler catalog"
         shell: bash
@@ -338,7 +302,7 @@ jobs:
           grep -q 'versionCode = 54' app/build.gradle.kts
           grep -q 'versionName = "31.1.3"' app/build.gradle.kts
           test -f ROSTIK_SOURCE_ID.txt
-          grep -qx 'ROSTIKAI-31.1.3-COMPILE-FIX-2' ROSTIK_SOURCE_ID.txt
+          grep -qx 'ROSTIKAI-31.1.3-PYTHON-PORT-3' ROSTIK_SOURCE_ID.txt
           grep -q 'buildConfig = true' app/build.gradle.kts
           grep -q 'import com.rostik.touchbot.BuildConfig' app/src/main/java/com/rostik/touchbot/DiscordLogger.kt
           ! grep -RIn --exclude-dir=build 'ball\.confidence' app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
@@ -346,6 +310,9 @@ jobs:
           grep -q 'AtomicReference<Bitmap?>' app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
           grep -q 'class MapPlanner' app/src/main/java/com/rostik/touchbot/MapPlanner.kt
           grep -q 'QueuePersistence' app/src/main/java/com/rostik/touchbot/QueuePersistence.kt
+          grep -q 'object TrophyRules' app/src/main/java/com/rostik/touchbot/TrophyRules.kt
+          grep -q 'LegacyStateDetector(assets)' app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
+          grep -q 'BrawlStarsApiClient(context)' app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
           if grep -RIn --exclude-dir=build --exclude='*.bin' -E 'TODO|FIXME|NotImplementedException|UnsupportedOperationException' app/src/main/java; then
             echo 'ERROR: unfinished implementation marker found'
             exit 1
@@ -366,7 +333,7 @@ jobs:
           grep -q 'override fun onBind(intent: Intent?): IBinder? = null' app/src/main/java/com/rostik/touchbot/OverlayService.kt
           ! grep -n 'ball\.confidence' app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
           ! grep -n 'tap=brawlers.*target\.confidence' app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
-          grep -qx 'ROSTIKAI-31.1.3-COMPILE-FIX-2' ROSTIK_SOURCE_ID.txt
+          grep -qx 'ROSTIKAI-31.1.3-PYTHON-PORT-3' ROSTIK_SOURCE_ID.txt
           echo "Kotlin compile preflight passed"
 
       - id: compile_debug
@@ -449,7 +416,7 @@ jobs:
           PY2
 
       - name: "21. Upload Debug + Release APKs"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: RostikAI-v31.1.3-APKs
           if-no-files-found: error
