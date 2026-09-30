@@ -1,799 +1,484 @@
 name: RostikAI v31.1.3 - CHECK -> BUILD -> APK
 
 on:
-workflow_dispatch:
-push:
-branches: ["**"]
+  workflow_dispatch:
+  push:
+    branches: ["**"]
 
 permissions:
-contents: read
+  contents: read
 
 concurrency:
-group: rostikai-${{ github.ref }}
-cancel-in-progress: true
+  group: rostikai-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
-ANDROID_PLATFORM: "35"
-ANDROID_BUILD_TOOLS: "35.0.0"
-GRADLE_VERSION: "8.10.2"
-PYTHON_PREFIX: "RostikAI-v31.1.3-PYTHON-PORT-3-PART-"
+  ANDROID_PLATFORM: "35"
+  ANDROID_BUILD_TOOLS: "35.0.0"
+  GRADLE_VERSION: "8.10.2"
+  PYTHON_PREFIX: "RostikAI-v31.1.3-PYTHON-PORT-3-PART-"
 
 jobs:
-verify:
-name: "CHECK — source + assets + project"
-runs-on: ubuntu-24.04
-timeout-minutes: 20
-
-```
-steps:
-  - name: "1. Checkout repository"
-    uses: actions/checkout@v6
-
-  - name: "2. Rebuild project from all 4 ZIP parts"
-    shell: bash
-    run: |
-      set -euo pipefail
-      rm -rf .rostik_parts .rostik_assembled app gradle
-      rm -f settings.gradle.kts build.gradle.kts gradle.properties gradlew gradlew.bat
-      mkdir -p .rostik_parts .rostik_assembled
-
-      declare -A SHA=(
-        [01]="a1f50b0dd5fba6b09d0ae47054ec766623865941f405ab03825422199f2b9863"
-        [02]="f4599d66729057598ba5153ea5e7041e5a4c9002c950ec63f94677f0c2b13c95"
-        [03]="7b7f03566c5df861d546351d7cd92b6a4ed35c952579b255395fd902d7d1e807"
-        [04]="6098a6a033bf75734526977dadca04ec1a7ba4ece2974f61644fe7c167af9328"
-      )
-
-      for n in 01 02 03 04; do
-        f="${PYTHON_PREFIX}${n}.zip"
-        test -f "$f" || { echo "ERROR: missing $f"; exit 1; }
-
-        actual="$(sha256sum "$f" | awk '{print $1}')"
-
-        test "$actual" = "${SHA[$n]}" || {
-          echo "ERROR: SHA-256 mismatch: $f"
-          echo "expected=${SHA[$n]}"
-          echo "actual=$actual"
-          exit 1
-        }
-
-        unzip -tq "$f"
-        cp -f "$f" .rostik_parts/
-        echo "ZIP $n: SHA-256 OK"
-      done
-
-      python3 - <<'PY'
-      from pathlib import Path
-      import zipfile
-
-      root=Path('.rostik_parts')
-      seen={}
-
-      for zpath in sorted(root.glob('*.zip')):
-          with zipfile.ZipFile(zpath) as z:
-              for name in z.namelist():
-                  if name.endswith('/'):
-                      continue
-
-                  if name in seen:
-                      raise SystemExit(
-                          f'duplicate path: {name} '
-                          f'({seen[name]} / {zpath.name})'
-                      )
-
-                  seen[name]=zpath.name
-
-                  if name == '.github/workflows/build.yml':
-                      raise SystemExit(
-                          'build.yml must stay outside the four source ZIPs'
-                      )
-
-      print(f'Archive integrity OK: {len(seen)} unique files')
-      PY
-
-      for n in 01 02 03 04; do
-        unzip -q ".rostik_parts/${PYTHON_PREFIX}${n}.zip" -d .rostik_assembled
-      done
-
-      cp -a .rostik_assembled/. ./
-
-      test -f settings.gradle.kts
-      test -f build.gradle.kts
-      test -f app/build.gradle.kts
-      test -f app/src/main/AndroidManifest.xml
-      test -f ROSTIK_SOURCE_ID.txt
-      test -f tools/verify_source.py
-
-      grep -qx 'ROSTIKAI-31.1.3-PYTHON-PORT-3' ROSTIK_SOURCE_ID.txt
-
-      echo "SOURCE_ASSEMBLY_PASS"
-
-  - name: "3. Set up Java 17"
-    uses: actions/setup-java@v6
-    with:
-      distribution: temurin
-      java-version: "17"
-
-  - name: "4. Locate Android SDK"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-
-      test -n "$SDK" || {
-        echo "ERROR: Android SDK not found"
-        exit 1
-      }
-
-      echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
-      echo "$SDK/platform-tools" >> "$GITHUB_PATH"
-
-      SDKMANAGER="$(
-        find "$SDK/cmdline-tools" \
-          -type f \
-          -name sdkmanager \
-          -path '*/bin/sdkmanager' \
-          2>/dev/null |
-        sort -V |
-        tail -n 1 || true
-      )"
-
-      test -n "$SDKMANAGER" || {
-        echo "ERROR: sdkmanager not found"
-        exit 1
-      }
-
-      echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
-
-  - name: "5. Install Android SDK 35"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-
-      "$SDKMANAGER" \
-        "platform-tools" \
-        "platforms;android-${ANDROID_PLATFORM}" \
-        "build-tools;${ANDROID_BUILD_TOOLS}"
-
-      test -d "$ANDROID_SDK_ROOT/platforms/android-${ANDROID_PLATFORM}"
-      test -d "$ANDROID_SDK_ROOT/build-tools/${ANDROID_BUILD_TOOLS}"
-
-  - name: "6. Set up Gradle 8.10.2"
-    uses: gradle/actions/setup-gradle@v6
-    with:
-      gradle-version: ${{ env.GRADLE_VERSION }}
-
-  - name: "CHECK 01 — deterministic source preflight"
-    shell: bash
-    run: |
-      set -euo pipefail
-      python3 tools/verify_source.py
-
-  - name: "CHECK 02 — Android project structure"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      for f in \
-        settings.gradle.kts \
-        build.gradle.kts \
-        app/build.gradle.kts \
-        app/src/main/AndroidManifest.xml \
-        app/src/main/java/com/rostik/touchbot/MainActivity.kt \
-        app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt \
-        app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt \
-        app/src/main/java/com/rostik/touchbot/BotAccessibilityService.kt
-      do
-        test -f "$f" || {
-          echo "MISSING: $f"
-          exit 1
-        }
-      done
-
-      echo "PROJECT_STRUCTURE_PASS"
-
-  - name: "CHECK 03 — 108 brawlers + icons"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      test "$(find app/src/main/assets/brawler_icons \
-        -type f -name '*.png' |
-        wc -l |
-        tr -d ' ')" = "108"
-
-      test "$(grep -Ev '^\s*(#|$)' \
-        app/src/main/assets/brawler_icons_manifest.txt |
-        wc -l |
-        tr -d ' ')" = "108"
-
-      test "$(grep -Ev '^\s*(#|$)' \
-        app/src/main/assets/brawler_avatar_map.properties |
-        wc -l |
-        tr -d ' ')" = "108"
-
-      grep -q 'e("shelly"' \
-        app/src/main/java/com/rostik/touchbot/BrawlerCatalog.kt
-
-      grep -q 'e("spike"' \
-        app/src/main/java/com/rostik/touchbot/BrawlerCatalog.kt
-
-      echo "BRAWLER_108_PASS"
-
-  - name: "CHECK 04 — imported Brawl Ball maps"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      python3 - <<'PY'
-      import json
-
-      p='app/src/main/assets/apk_port/maps/brawl_ball_maps.json'
-      data=json.load(open(p, encoding='utf-8'))
-
-      assert len(data) >= 80, len(data)
-      assert 'Back Pocket' in data
-
-      for name, rows in data.items():
-          assert len(rows) == 33, name
-          assert all(
-              isinstance(row, str) and len(row) == 21
-              for row in rows
-          ), name
-
-      print(
-          f'MAPS_PASS: {len(data)} maps, '
-          'every map 33x21'
-      )
-      PY
-
-  - name: "CHECK 05 — APK visual/model assets"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      test -f app/src/main/assets/apk_port/brawler_icons/shelly.png
-      test -f app/src/main/assets/apk_port/brawler_icons/spike.png
-      test -f app/src/main/assets/apk_port/lobby/victory.png
-      test -f app/src/main/assets/apk_port/lobby/defeat.png
-      test -f app/src/main/assets/apk_port/ui_objects/brawlball_gamemode_icon.png
-
-      test -f app/src/main/assets/apk_port/models/m0.bin
-      test -f app/src/main/assets/apk_port/models/m1.bin
-      test -f app/src/main/assets/apk_port/models/m2.bin
-
-      echo "ASSETS_PASS"
-
-  - name: "CHECK 06 — capture + gesture pipeline"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      grep -q 'setOnImageAvailableListener' \
-        app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt
-
-      grep -q 'Frame watchdog recovery' \
-        app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt
-
-      grep -q 'GestureResultCallback' \
-        app/src/main/java/com/rostik/touchbot/BotAccessibilityService.kt
-
-      grep -q 'gestureBusy' \
-        app/src/main/java/com/rostik/touchbot/BotAccessibilityService.kt
-
-      grep -q 'submitFrame' \
-        app/src/main/java/com/rostik/touchbot/BotRuntime.kt
-
-      echo "CAPTURE_GESTURE_PASS"
-
-  - name: "CHECK 07 — known broken symbols / unfinished markers"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      if grep -RIn \
-        --exclude-dir=.gradle \
-        --exclude-dir=build \
-        -E 'FRAME_RATE_COMPATIBILITY_NO_VIOLATION|selectAllOnFocus[[:space:]]*=|ball\.confidence' \
-        app/src/main/java
-      then
-        echo "ERROR: known broken symbol found"
-        exit 1
-      fi
-
-      if grep -RIn \
-        --exclude-dir=.gradle \
-        --exclude-dir=build \
-        -E 'TODO|FIXME|NotImplementedException|UnsupportedOperationException' \
-        app/src/main/java
-      then
-        echo "ERROR: unfinished implementation marker found"
-        exit 1
-      fi
-
-      echo "KNOWN_BROKEN_SYMBOLS_PASS"
-
-  - name: "CHECK 08 — full source invariants"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      test "$(find app/src/main/java \
-        -type f \
-        -name '*.kt' |
-        wc -l |
-        tr -d ' ')" -ge 28
-
-      grep -q 'versionCode = 54' app/build.gradle.kts
-      grep -q 'versionName = "31.1.3"' app/build.gradle.kts
-      grep -q 'buildConfig = true' app/build.gradle.kts
-
-      grep -q 'import com.rostik.touchbot.BuildConfig' \
-        app/src/main/java/com/rostik/touchbot/DiscordLogger.kt
-
-      grep -q 'AtomicReference<Bitmap?>' \
-        app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
-
-      grep -q 'class MapPlanner' \
-        app/src/main/java/com/rostik/touchbot/MapPlanner.kt
-
-      grep -q 'QueuePersistence' \
-        app/src/main/java/com/rostik/touchbot/QueuePersistence.kt
-
-      grep -q 'object TrophyRules' \
-        app/src/main/java/com/rostik/touchbot/TrophyRules.kt
-
-      grep -q 'LegacyStateDetector(assets)' \
-        app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
-
-      grep -q 'BrawlStarsApiClient(context)' \
-        app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
-
-      echo "SOURCE_INVARIANTS_PASS"
-
-  - name: "CHECK 09 — Kotlin/Gradle configuration"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      grep -q 'com.android.application.*8.7.3' build.gradle.kts
-      grep -q 'org.jetbrains.kotlin.android.*2.1.0' build.gradle.kts
-      grep -q 'compileSdk = 35' app/build.gradle.kts
-      grep -q 'minSdk = 26' app/build.gradle.kts
-      grep -q 'targetSdk = 35' app/build.gradle.kts
-      grep -q 'JavaVersion.VERSION_17' app/build.gradle.kts
-
-      echo "GRADLE_CONFIG_PASS"
-
-  - name: "CHECK 10 — create verified source artifact"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      rm -f /tmp/rostikai-verified-source.tar.gz
-
-      tar -czf /tmp/rostikai-verified-source.tar.gz \
-        --exclude='./.git' \
-        --exclude='./.rostik_parts' \
-        --exclude='./.rostik_assembled' \
-        --exclude='./*.zip' \
-        --exclude='./app/build' \
-        --exclude='./.gradle' \
-        .
-
-      test -s /tmp/rostikai-verified-source.tar.gz
-
-      echo "VERIFIED_SOURCE_ARTIFACT_PASS"
-
-  - name: "Upload verified source"
-    uses: actions/upload-artifact@v7
-    with:
-      name: RostikAI-v31.1.3-verified-source
-      if-no-files-found: error
-      retention-days: 1
-      path: /tmp/rostikai-verified-source.tar.gz
-```
-
-build:
-name: "BUILD — compile + lint + APK"
-needs: verify
-runs-on: ubuntu-24.04
-timeout-minutes: 35
-
-```
-steps:
-  - name: "1. Checkout repository"
-    uses: actions/checkout@v6
-
-  - name: "2. Download source that passed CHECK"
-    uses: actions/download-artifact@v8
-    with:
-      name: RostikAI-v31.1.3-verified-source
-      path: /tmp/verified
-
-  - name: "3. Restore verified source"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      test -f /tmp/verified/rostikai-verified-source.tar.gz
-
-      tar -xzf /tmp/verified/rostikai-verified-source.tar.gz -C .
-
-      test -f settings.gradle.kts
-      test -f app/build.gradle.kts
-      test -f ROSTIK_SOURCE_ID.txt
-
-      grep -qx \
-        'ROSTIKAI-31.1.3-PYTHON-PORT-3' \
-        ROSTIK_SOURCE_ID.txt
-
-      python3 tools/verify_source.py
-
-      echo "VERIFIED_SOURCE_RESTORED"
-
-  - name: "4. Set up Java 17"
-    uses: actions/setup-java@v6
-    with:
-      distribution: temurin
-      java-version: "17"
-
-  - name: "5. Locate Android SDK"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-
-      test -n "$SDK" || {
-        echo "ERROR: Android SDK not found"
-        exit 1
-      }
-
-      echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
-      echo "$SDK/platform-tools" >> "$GITHUB_PATH"
-
-      SDKMANAGER="$(
-        find "$SDK/cmdline-tools" \
-          -type f \
-          -name sdkmanager \
-          -path '*/bin/sdkmanager' \
-          2>/dev/null |
-        sort -V |
-        tail -n 1 || true
-      )"
-
-      test -n "$SDKMANAGER" || {
-        echo "ERROR: sdkmanager not found"
-        exit 1
-      }
-
-      echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
-
-  - name: "6. Install Android SDK 35"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-
-      "$SDKMANAGER" \
-        "platform-tools" \
-        "platforms;android-${ANDROID_PLATFORM}" \
-        "build-tools;${ANDROID_BUILD_TOOLS}"
-
-  - name: "7. Set up Gradle 8.10.2"
-    uses: gradle/actions/setup-gradle@v6
-    with:
-      gradle-version: ${{ env.GRADLE_VERSION }}
-
-  - name: "8. Prepare CI logs"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      rm -rf ci-logs
-      mkdir -p ci-logs
-
-      java -version 2>&1 |
-        tee ci-logs/java-version.log
-
-      gradle --version 2>&1 |
-        tee ci-logs/gradle-version.log
-
-  - id: compile_debug
-    name: "9. Compile Debug Kotlin"
-    shell: bash
-    run: |
-      set -o pipefail
-
-      gradle \
-        --no-daemon \
-        --console=plain \
-        --stacktrace \
-        --warning-mode=all \
-        :app:compileDebugKotlin \
-        2>&1 |
-        tee ci-logs/compileDebugKotlin.log
-
-      status=${PIPESTATUS[0]}
-
-      echo "exit=$status" |
-        tee -a ci-logs/compileDebugKotlin.log
-
-      exit "$status"
-
-  - id: lint_debug
-    name: "10. Lint Debug"
-    shell: bash
-    run: |
-      set -o pipefail
-
-      gradle \
-        --no-daemon \
-        --console=plain \
-        --stacktrace \
-        :app:lintDebug \
-        2>&1 |
-        tee ci-logs/lintDebug.log
-
-      status=${PIPESTATUS[0]}
-
-      echo "exit=$status" |
-        tee -a ci-logs/lintDebug.log
-
-      exit "$status"
-
-  - id: compile_release
-    name: "11. Compile Release Kotlin"
-    shell: bash
-    run: |
-      set -o pipefail
-
-      gradle \
-        --no-daemon \
-        --console=plain \
-        --stacktrace \
-        --warning-mode=all \
-        :app:compileReleaseKotlin \
-        2>&1 |
-        tee ci-logs/compileReleaseKotlin.log
-
-      status=${PIPESTATUS[0]}
-
-      echo "exit=$status" |
-        tee -a ci-logs/compileReleaseKotlin.log
-
-      exit "$status"
-
-  - id: build_debug
-    name: "12. Build Debug APK"
-    shell: bash
-    run: |
-      set -o pipefail
-
-      gradle \
-        --no-daemon \
-        --console=plain \
-        --stacktrace \
-        :app:assembleDebug \
-        2>&1 |
-        tee ci-logs/assembleDebug.log
-
-      status=${PIPESTATUS[0]}
-
-      echo "exit=$status" |
-        tee -a ci-logs/assembleDebug.log
-
-      exit "$status"
-
-  - id: verify_debug
-    name: "13. Verify Debug APK"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      APK=app/build/outputs/apk/debug/app-debug.apk
-
-      test -f "$APK"
-
-      unzip -Z1 "$APK" |
-        grep -q '^assets/brawler_icons/shelly.png$'
-
-      unzip -Z1 "$APK" |
-        grep -q '^assets/apk_port/maps/brawl_ball_maps.json$'
-
-      unzip -Z1 "$APK" |
-        grep -q '^assets/apk_port/models/m0.bin$'
-
-      python3 - "$APK" <<'PY'
-      import sys
-      import zipfile
-      from pathlib import Path
-
-      names=set(zipfile.ZipFile(sys.argv[1]).namelist())
-
-      ids=[
-          x.strip()
-          for x in Path(
-              'app/src/main/assets/brawler_icons_manifest.txt'
-          ).read_text().splitlines()
-          if x.strip()
-      ]
-
-      assert len(ids)==108
-
-      missing=[
-          f'assets/brawler_icons/{i}.png'
-          for i in ids
-          if f'assets/brawler_icons/{i}.png' not in names
-      ]
-
-      assert not missing, missing[:10]
-
-      print(
-          'DEBUG_APK_PASS: '
-          'all 108 brawler icons present'
-      )
-      PY
-
-  - id: build_release
-    name: "14. Build Release APK"
-    shell: bash
-    run: |
-      set -o pipefail
-
-      gradle \
-        --no-daemon \
-        --console=plain \
-        --stacktrace \
-        :app:assembleRelease \
-        2>&1 |
-        tee ci-logs/assembleRelease.log
-
-      status=${PIPESTATUS[0]}
-
-      echo "exit=$status" |
-        tee -a ci-logs/assembleRelease.log
-
-      exit "$status"
-
-  - id: verify_release
-    name: "15. Verify Release APK"
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      APK=app/build/outputs/apk/release/app-release.apk
-
-      test -f "$APK"
-
-      unzip -Z1 "$APK" |
-        grep -q '^assets/apk_port/maps/brawl_ball_maps.json$'
-
-      unzip -Z1 "$APK" |
-        grep -q '^assets/apk_port/brawler_icons/shelly.png$'
-
-      unzip -Z1 "$APK" |
-        grep -q '^assets/apk_port/lobby/victory.png$'
-
-      python3 - "$APK" <<'PY'
-      import sys
-      import zipfile
-      from pathlib import Path
-
-      names=set(zipfile.ZipFile(sys.argv[1]).namelist())
-
-      rows={}
-
-      for line in Path(
-          'app/src/main/assets/brawler_avatar_map.properties'
-      ).read_text().splitlines():
-
-          if line.strip() and not line.lstrip().startswith('#'):
-              k,v=line.split('=',1)
-              rows[k]=v
-
-      assert len(rows)==108
-
-      missing=[]
-
-      for k,v in rows.items():
-
-          if v.startswith('REMOTE|'):
-              expected=f'assets/brawler_icons/{k}.png'
-          else:
-              expected=f'assets/apk_port/brawler_icons/{v}'
-
-          if expected not in names:
-              missing.append((k,expected))
-
-      assert not missing, missing[:10]
-
-      print(
-          'RELEASE_APK_PASS: '
-          'all 108 avatar mappings/fallbacks present'
-      )
-      PY
-
-  - name: "16. Upload Debug + Release APKs"
-    uses: actions/upload-artifact@v7
-    with:
-      name: RostikAI-v31.1.3-APKs
-      if-no-files-found: error
-      path: |
-        app/build/outputs/apk/debug/app-debug.apk
-        app/build/outputs/apk/release/app-release.apk
-
-  - name: "17. Upload CI diagnostics"
-    if: ${{ always() }}
-    uses: actions/upload-artifact@v7
-    with:
-      name: RostikAI-v31.1.3-CI-diagnostics
-      if-no-files-found: warn
-      retention-days: 7
-      path: |
-        ci-logs/**
-        app/build/reports/**
-        app/build/outputs/logs/**
-
-  - name: "18. Discord final status"
-    if: ${{ always() }}
-    continue-on-error: true
-    shell: bash
-    env:
-      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-      JOB_STATUS: ${{ job.status }}
-    run: |
-      if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
-        echo "DISCORD_WEBHOOK_URL is not configured; skipping."
-        exit 0
-      fi
-
-      python3 - <<'PY' |
-      import json
-      import os
-
-      status=os.environ.get('JOB_STATUS','unknown')
-
-      print(json.dumps({
-          'username':'RostikAI CI',
-          'allowed_mentions':{'parse':[]},
-          'embeds':[{
+  verify:
+    name: "CHECK — source + assets + project"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: "1. Checkout repository"
+        uses: actions/checkout@v6
+
+      - name: "2. Rebuild project from all 4 ZIP parts"
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .rostik_parts .rostik_assembled app gradle
+          rm -f settings.gradle.kts build.gradle.kts gradle.properties gradlew gradlew.bat
+          mkdir -p .rostik_parts .rostik_assembled
+
+          declare -A SHA=(
+            [01]="a1f50b0dd5fba6b09d0ae47054ec766623865941f405ab03825422199f2b9863"
+            [02]="f4599d66729057598ba5153ea5e7041e5a4c9002c950ec63f94677f0c2b13c95"
+            [03]="7b7f03566c5df861d546351d7cd92b6a4ed35c952579b255395fd902d7d1e807"
+            [04]="6098a6a033bf75734526977dadca04ec1a7ba4ece2974f61644fe7c167af9328"
+          )
+
+          for n in 01 02 03 04; do
+            f="${PYTHON_PREFIX}${n}.zip"
+            test -f "$f" || { echo "ERROR: missing $f"; exit 1; }
+            actual="$(sha256sum "$f" | awk '{print $1}')"
+            test "$actual" = "${SHA[$n]}" || {
+              echo "ERROR: SHA-256 mismatch: $f"
+              echo "expected=${SHA[$n]}"
+              echo "actual=$actual"
+              exit 1
+            }
+            unzip -tq "$f"
+            cp -f "$f" .rostik_parts/
+            echo "ZIP $n: SHA-256 OK"
+          done
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+          root=Path('.rostik_parts')
+          seen={}
+          for zpath in sorted(root.glob('*.zip')):
+              with zipfile.ZipFile(zpath) as z:
+                  for name in z.namelist():
+                      if name.endswith('/'):
+                          continue
+                      if name in seen:
+                          raise SystemExit(f'duplicate path: {name} ({seen[name]} / {zpath.name})')
+                      seen[name]=zpath.name
+                      if name == '.github/workflows/build.yml':
+                          raise SystemExit('build.yml must stay outside the four source ZIPs')
+          print(f'Archive integrity OK: {len(seen)} unique files')
+          PY
+
+          for n in 01 02 03 04; do
+            unzip -q ".rostik_parts/${PYTHON_PREFIX}${n}.zip" -d .rostik_assembled
+          done
+
+          cp -a .rostik_assembled/. ./
+          test -f settings.gradle.kts
+          test -f build.gradle.kts
+          test -f app/build.gradle.kts
+          test -f app/src/main/AndroidManifest.xml
+          test -f ROSTIK_SOURCE_ID.txt
+          test -f tools/verify_source.py
+          grep -qx 'ROSTIKAI-31.1.3-PYTHON-PORT-3' ROSTIK_SOURCE_ID.txt
+          echo "SOURCE_ASSEMBLY_PASS"
+
+      - name: "3. Set up Java 17"
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: "4. Locate Android SDK"
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -n "$SDK" || { echo "ERROR: Android SDK not found"; exit 1; }
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager -path '*/bin/sdkmanager' 2>/dev/null | sort -V | tail -n 1 || true)"
+          test -n "$SDKMANAGER" || { echo "ERROR: sdkmanager not found"; exit 1; }
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+
+      - name: "5. Install Android SDK 35"
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-${ANDROID_PLATFORM}" "build-tools;${ANDROID_BUILD_TOOLS}"
+          test -d "$ANDROID_SDK_ROOT/platforms/android-${ANDROID_PLATFORM}"
+          test -d "$ANDROID_SDK_ROOT/build-tools/${ANDROID_BUILD_TOOLS}"
+
+      - name: "6. Set up Gradle 8.10.2"
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: "CHECK 01 — deterministic source preflight"
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/verify_source.py
+
+      - name: "CHECK 02 — Android project structure"
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in \
+            settings.gradle.kts build.gradle.kts app/build.gradle.kts \
+            app/src/main/AndroidManifest.xml \
+            app/src/main/java/com/rostik/touchbot/MainActivity.kt \
+            app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt \
+            app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt \
+            app/src/main/java/com/rostik/touchbot/BotAccessibilityService.kt; do
+            test -f "$f" || { echo "MISSING: $f"; exit 1; }
+          done
+          echo "PROJECT_STRUCTURE_PASS"
+
+      - name: "CHECK 03 — 108 brawlers + icons"
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find app/src/main/assets/brawler_icons -type f -name '*.png' | wc -l | tr -d ' ')" = "108"
+          test "$(grep -Ev '^\s*(#|$)' app/src/main/assets/brawler_icons_manifest.txt | wc -l | tr -d ' ')" = "108"
+          test "$(grep -Ev '^\s*(#|$)' app/src/main/assets/brawler_avatar_map.properties | wc -l | tr -d ' ')" = "108"
+          grep -q 'e("shelly"' app/src/main/java/com/rostik/touchbot/BrawlerCatalog.kt
+          grep -q 'e("spike"' app/src/main/java/com/rostik/touchbot/BrawlerCatalog.kt
+          echo "BRAWLER_108_PASS"
+
+      - name: "CHECK 04 — imported Brawl Ball maps"
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          p='app/src/main/assets/apk_port/maps/brawl_ball_maps.json'
+          data=json.load(open(p, encoding='utf-8'))
+          assert len(data) >= 80, len(data)
+          assert 'Back Pocket' in data
+          for name, rows in data.items():
+              assert len(rows) == 33, name
+              assert all(isinstance(row, str) and len(row) == 21 for row in rows), name
+          print(f'MAPS_PASS: {len(data)} maps, every map 33x21')
+          PY
+
+      - name: "CHECK 05 — APK visual/model assets"
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f app/src/main/assets/apk_port/brawler_icons/shelly.png
+          test -f app/src/main/assets/apk_port/brawler_icons/spike.png
+          test -f app/src/main/assets/apk_port/lobby/victory.png
+          test -f app/src/main/assets/apk_port/lobby/defeat.png
+          test -f app/src/main/assets/apk_port/ui_objects/brawlball_gamemode_icon.png
+          test -f app/src/main/assets/apk_port/models/m0.bin
+          test -f app/src/main/assets/apk_port/models/m1.bin
+          test -f app/src/main/assets/apk_port/models/m2.bin
+          echo "ASSETS_PASS"
+
+      - name: "CHECK 06 — capture + gesture pipeline"
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'setOnImageAvailableListener' app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt
+          grep -q 'Frame watchdog recovery' app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt
+          grep -q 'GestureResultCallback' app/src/main/java/com/rostik/touchbot/BotAccessibilityService.kt
+          grep -q 'gestureBusy' app/src/main/java/com/rostik/touchbot/BotAccessibilityService.kt
+          grep -q 'submitFrame' app/src/main/java/com/rostik/touchbot/BotRuntime.kt
+          echo "CAPTURE_GESTURE_PASS"
+
+      - name: "CHECK 07 — known broken symbols / unfinished markers"
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RIn --exclude-dir=.gradle --exclude-dir=build \
+            -E 'FRAME_RATE_COMPATIBILITY_NO_VIOLATION|selectAllOnFocus[[:space:]]*=|ball\.confidence' \
+            app/src/main/java; then
+            echo "ERROR: known broken symbol found"
+            exit 1
+          fi
+          if grep -RIn --exclude-dir=.gradle --exclude-dir=build \
+            -E 'TODO|FIXME|NotImplementedException|UnsupportedOperationException' \
+            app/src/main/java; then
+            echo "ERROR: unfinished implementation marker found"
+            exit 1
+          fi
+          echo "KNOWN_BROKEN_SYMBOLS_PASS"
+
+      - name: "CHECK 08 — full source invariants"
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find app/src/main/java -type f -name '*.kt' | wc -l | tr -d ' ')" -ge 28
+          grep -q 'versionCode = 54' app/build.gradle.kts
+          grep -q 'versionName = "31.1.3"' app/build.gradle.kts
+          grep -q 'buildConfig = true' app/build.gradle.kts
+          grep -q 'import com.rostik.touchbot.BuildConfig' app/src/main/java/com/rostik/touchbot/DiscordLogger.kt
+          grep -q 'AtomicReference<Bitmap?>' app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
+          grep -q 'class MapPlanner' app/src/main/java/com/rostik/touchbot/MapPlanner.kt
+          grep -q 'QueuePersistence' app/src/main/java/com/rostik/touchbot/QueuePersistence.kt
+          grep -q 'object TrophyRules' app/src/main/java/com/rostik/touchbot/TrophyRules.kt
+          grep -q 'LegacyStateDetector(assets)' app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
+          grep -q 'BrawlStarsApiClient(context)' app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
+          echo "SOURCE_INVARIANTS_PASS"
+
+      - name: "CHECK 09 — Kotlin/Gradle configuration"
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'com.android.application.*8.7.3' build.gradle.kts
+          grep -q 'org.jetbrains.kotlin.android.*2.1.0' build.gradle.kts
+          grep -q 'compileSdk = 35' app/build.gradle.kts
+          grep -q 'minSdk = 26' app/build.gradle.kts
+          grep -q 'targetSdk = 35' app/build.gradle.kts
+          grep -q 'JavaVersion.VERSION_17' app/build.gradle.kts
+          echo "GRADLE_CONFIG_PASS"
+
+      - name: "CHECK 10 — create verified source artifact"
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f /tmp/rostikai-verified-source.tar.gz
+          tar -czf /tmp/rostikai-verified-source.tar.gz \
+            --exclude='./.git' \
+            --exclude='./.rostik_parts' \
+            --exclude='./.rostik_assembled' \
+            --exclude='./*.zip' \
+            --exclude='./app/build' \
+            --exclude='./.gradle' \
+            .
+          test -s /tmp/rostikai-verified-source.tar.gz
+          echo "VERIFIED_SOURCE_ARTIFACT_PASS"
+
+      - name: "Upload verified source"
+        uses: actions/upload-artifact@v7
+        with:
+          name: RostikAI-v31.1.3-verified-source
+          if-no-files-found: error
+          retention-days: 1
+          path: /tmp/rostikai-verified-source.tar.gz
+
+  build:
+    name: "BUILD — compile + lint + APK"
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+
+    steps:
+      - name: "1. Checkout repository"
+        uses: actions/checkout@v6
+
+      - name: "2. Download source that passed CHECK"
+        uses: actions/download-artifact@v8
+        with:
+          name: RostikAI-v31.1.3-verified-source
+          path: /tmp/verified
+
+      - name: "3. Restore verified source"
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f /tmp/verified/rostikai-verified-source.tar.gz
+          tar -xzf /tmp/verified/rostikai-verified-source.tar.gz -C .
+          test -f settings.gradle.kts
+          test -f app/build.gradle.kts
+          test -f ROSTIK_SOURCE_ID.txt
+          grep -qx 'ROSTIKAI-31.1.3-PYTHON-PORT-3' ROSTIK_SOURCE_ID.txt
+          python3 tools/verify_source.py
+          echo "VERIFIED_SOURCE_RESTORED"
+
+      - name: "4. Set up Java 17"
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: "5. Locate Android SDK"
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -n "$SDK" || { echo "ERROR: Android SDK not found"; exit 1; }
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager -path '*/bin/sdkmanager' 2>/dev/null | sort -V | tail -n 1 || true)"
+          test -n "$SDKMANAGER" || { echo "ERROR: sdkmanager not found"; exit 1; }
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+
+      - name: "6. Install Android SDK 35"
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-${ANDROID_PLATFORM}" "build-tools;${ANDROID_BUILD_TOOLS}"
+
+      - name: "7. Set up Gradle 8.10.2"
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: "8. Prepare CI logs"
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf ci-logs
+          mkdir -p ci-logs
+          java -version 2>&1 | tee ci-logs/java-version.log
+          gradle --version 2>&1 | tee ci-logs/gradle-version.log
+
+      - id: compile_debug
+        name: "9. Compile Debug Kotlin"
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon --console=plain --stacktrace --warning-mode=all :app:compileDebugKotlin 2>&1 | tee ci-logs/compileDebugKotlin.log
+          status=${PIPESTATUS[0]}
+          echo "exit=$status" | tee -a ci-logs/compileDebugKotlin.log
+          exit "$status"
+
+      - id: lint_debug
+        name: "10. Lint Debug"
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon --console=plain --stacktrace :app:lintDebug 2>&1 | tee ci-logs/lintDebug.log
+          status=${PIPESTATUS[0]}
+          echo "exit=$status" | tee -a ci-logs/lintDebug.log
+          exit "$status"
+
+      - id: compile_release
+        name: "11. Compile Release Kotlin"
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon --console=plain --stacktrace --warning-mode=all :app:compileReleaseKotlin 2>&1 | tee ci-logs/compileReleaseKotlin.log
+          status=${PIPESTATUS[0]}
+          echo "exit=$status" | tee -a ci-logs/compileReleaseKotlin.log
+          exit "$status"
+
+      - id: build_debug
+        name: "12. Build Debug APK"
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon --console=plain --stacktrace :app:assembleDebug 2>&1 | tee ci-logs/assembleDebug.log
+          status=${PIPESTATUS[0]}
+          echo "exit=$status" | tee -a ci-logs/assembleDebug.log
+          exit "$status"
+
+      - id: verify_debug
+        name: "13. Verify Debug APK"
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK"
+          unzip -Z1 "$APK" | grep -q '^assets/brawler_icons/shelly.png$'
+          unzip -Z1 "$APK" | grep -q '^assets/apk_port/maps/brawl_ball_maps.json$'
+          unzip -Z1 "$APK" | grep -q '^assets/apk_port/models/m0.bin$'
+          python3 - "$APK" <<'PY'
+          import sys, zipfile
+          from pathlib import Path
+          names=set(zipfile.ZipFile(sys.argv[1]).namelist())
+          ids=[x.strip() for x in Path('app/src/main/assets/brawler_icons_manifest.txt').read_text().splitlines() if x.strip()]
+          assert len(ids)==108
+          missing=[f'assets/brawler_icons/{i}.png' for i in ids if f'assets/brawler_icons/{i}.png' not in names]
+          assert not missing, missing[:10]
+          print('DEBUG_APK_PASS: all 108 brawler icons present')
+          PY
+
+      - id: build_release
+        name: "14. Build Release APK"
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon --console=plain --stacktrace :app:assembleRelease 2>&1 | tee ci-logs/assembleRelease.log
+          status=${PIPESTATUS[0]}
+          echo "exit=$status" | tee -a ci-logs/assembleRelease.log
+          exit "$status"
+
+      - id: verify_release
+        name: "15. Verify Release APK"
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/release/app-release.apk
+          test -f "$APK"
+          unzip -Z1 "$APK" | grep -q '^assets/apk_port/maps/brawl_ball_maps.json$'
+          unzip -Z1 "$APK" | grep -q '^assets/apk_port/brawler_icons/shelly.png$'
+          unzip -Z1 "$APK" | grep -q '^assets/apk_port/lobby/victory.png$'
+          python3 - "$APK" <<'PY'
+          import sys, zipfile
+          from pathlib import Path
+          names=set(zipfile.ZipFile(sys.argv[1]).namelist())
+          rows={}
+          for line in Path('app/src/main/assets/brawler_avatar_map.properties').read_text().splitlines():
+              if line.strip() and not line.lstrip().startswith('#'):
+                  k,v=line.split('=',1); rows[k]=v
+          assert len(rows)==108
+          missing=[]
+          for k,v in rows.items():
+              expected=f'assets/brawler_icons/{k}.png' if v.startswith('REMOTE|') else f'assets/apk_port/brawler_icons/{v}'
+              if expected not in names: missing.append((k,expected))
+          assert not missing, missing[:10]
+          print('RELEASE_APK_PASS: all 108 avatar mappings/fallbacks present')
+          PY
+
+      - name: "16. Upload Debug + Release APKs"
+        uses: actions/upload-artifact@v7
+        with:
+          name: RostikAI-v31.1.3-APKs
+          if-no-files-found: error
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release.apk
+
+      - name: "17. Upload CI diagnostics"
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: RostikAI-v31.1.3-CI-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            ci-logs/**
+            app/build/reports/**
+            app/build/outputs/logs/**
+
+      - name: "18. Discord final status"
+        if: ${{ always() }}
+        continue-on-error: true
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
+            echo "DISCORD_WEBHOOK_URL is not configured; skipping."
+            exit 0
+          fi
+          python3 - <<'PY' | curl -fsS -X POST -H 'Content-Type: application/json' --data-binary @- "$DISCORD_WEBHOOK_URL" >/dev/null
+          import json, os
+          status=os.environ.get('JOB_STATUS','unknown')
+          print(json.dumps({
+            'username':'RostikAI CI',
+            'allowed_mentions':{'parse':[]},
+            'embeds':[{
               'title':f'[BUILD] GitHub Actions {status.upper()}',
               'description':f'RostikAI v31.1.3 — {status}',
               'fields':[
-                  {
-                      'name':'branch',
-                      'value':os.environ.get(
-                          'GITHUB_REF_NAME','-'
-                      ),
-                      'inline':True
-                  },
-                  {
-                      'name':'run',
-                      'value':os.environ.get(
-                          'GITHUB_RUN_ID','-'
-                      ),
-                      'inline':True
-                  },
-                  {
-                      'name':'commit',
-                      'value':os.environ.get(
-                          'GITHUB_SHA','-'
-                      )[:12],
-                      'inline':True
-                  },
+                {'name':'branch','value':os.environ.get('GITHUB_REF_NAME','-'),'inline':True},
+                {'name':'run','value':os.environ.get('GITHUB_RUN_ID','-'),'inline':True},
+                {'name':'commit','value':os.environ.get('GITHUB_SHA','-')[:12],'inline':True},
               ]
-          }]
-      }))
-      PY
-      curl -fsS \
-        -X POST \
-        -H 'Content-Type: application/json' \
-        --data-binary @- \
-        "$DISCORD_WEBHOOK_URL" >/dev/null
-```
+            }]
+          }))
+          PY
