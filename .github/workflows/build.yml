@@ -31,7 +31,7 @@ jobs:
           fi
 
           mapfile -t PARTS < <(find . -maxdepth 1 -type f \
-            \( -name 'RostikAI-v31.1.3-DISCORD-PART-*.zip' -o -name 'RostikAI-v31.1.2-DISCORD-PART-*.zip' \) | sort)
+            \( -name 'RostikAI-v31.1.3-COMPILE-FIX-PART-*.zip' -o -name 'RostikAI-v31.1.3-DISCORD-PART-*.zip' -o -name 'RostikAI-v31.1.2-DISCORD-PART-*.zip' \) | sort)
           if (( ${#PARTS[@]} == 0 )); then
             echo "ERROR: Android project is missing and no RostikAI source ZIP parts were found."
             exit 1
@@ -225,6 +225,10 @@ jobs:
           test "$(find app/src/main/assets/apk_port/models -type f -name '*.bin' -printf '%f\n' | sort | tr '\n' ' ')" = "m0.bin m1.bin m2.bin "
           grep -q 'versionCode = 54' app/build.gradle.kts
           grep -q 'versionName = "31.1.3"' app/build.gradle.kts
+          grep -q 'buildConfig = true' app/build.gradle.kts
+          grep -q 'import com.rostik.touchbot.BuildConfig' app/src/main/java/com/rostik/touchbot/DiscordLogger.kt
+          ! grep -RIn --exclude-dir=build 'ball\.confidence' app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
+          grep -q 'override fun onBind(intent: Intent?): IBinder? = null' app/src/main/java/com/rostik/touchbot/OverlayService.kt
           grep -q 'AtomicReference<Bitmap?>' app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
           grep -q 'class MapPlanner' app/src/main/java/com/rostik/touchbot/MapPlanner.kt
           grep -q 'QueuePersistence' app/src/main/java/com/rostik/touchbot/QueuePersistence.kt
@@ -240,6 +244,14 @@ jobs:
           java -version
           gradle --version
           "$SDKMANAGER" --version
+
+      - name: "13.5. Kotlin compile preflight"
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'override fun onBind(intent: Intent?): IBinder? = null' app/src/main/java/com/rostik/touchbot/OverlayService.kt
+          ! grep -n 'ball\.confidence' app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
+          echo "Kotlin compile preflight passed"
 
       - id: compile_debug
         name: "14. Compile Debug Kotlin"
