@@ -43,7 +43,22 @@ jobs:
             [01]="a1f50b0dd5fba6b09d0ae47054ec766623865941f405ab03825422199f2b9863"
             [02]="f4599d66729057598ba5153ea5e7041e5a4c9002c950ec63f94677f0c2b13c95"
             [03]="7b7f03566c5df861d546351d7cd92b6a4ed35c952579b255395fd902d7d1e807"
+            [04]="6098a6a033bf75734526977dadca04ec1a7ba4ece2974f61644fe7c167af9328"
           )
+
+          # First use ZIPs committed in the repository / restored by Git LFS.
+          # If they are not present, try downloading the same named assets from
+          # the latest GitHub release before failing the integrity check.
+          missing=0
+          for n in 01 02 03 04; do
+            [[ -f "${PYTHON_PREFIX}${n}.zip" ]] || missing=$((missing+1))
+          done
+          if [[ "$missing" -gt 0 ]]; then
+            echo "Root checkout is missing $missing ZIP part(s); trying GitHub release assets..."
+            if command -v gh >/dev/null 2>&1; then
+              gh release download --pattern "${PYTHON_PREFIX}*.zip" --dir . --clobber || true
+            fi
+          fi
 
           for n in 01 02 03 04; do
             f="${PYTHON_PREFIX}${n}.zip"
