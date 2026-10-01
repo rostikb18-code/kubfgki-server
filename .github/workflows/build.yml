@@ -28,7 +28,7 @@ jobs:
       - name: "1. Checkout repository"
         uses: actions/checkout@v6
 
-      - name: "2. Rebuild project from all 4 ZIP parts"
+      - name: "2. Rebuild project from all 3 ZIP parts"
         shell: bash
         run: |
           set -euo pipefail
@@ -40,10 +40,9 @@ jobs:
             [01]="a1f50b0dd5fba6b09d0ae47054ec766623865941f405ab03825422199f2b9863"
             [02]="f4599d66729057598ba5153ea5e7041e5a4c9002c950ec63f94677f0c2b13c95"
             [03]="7b7f03566c5df861d546351d7cd92b6a4ed35c952579b255395fd902d7d1e807"
-            [04]="6098a6a033bf75734526977dadca04ec1a7ba4ece2974f61644fe7c167af9328"
           )
 
-          for n in 01 02 03 04; do
+          for n in 01 02 03; do
             f="${PYTHON_PREFIX}${n}.zip"
             test -f "$f" || { echo "ERROR: missing $f"; exit 1; }
             actual="$(sha256sum "$f" | awk '{print $1}')"
@@ -72,11 +71,11 @@ jobs:
                           raise SystemExit(f'duplicate path: {name} ({seen[name]} / {zpath.name})')
                       seen[name]=zpath.name
                       if name == '.github/workflows/build.yml':
-                          raise SystemExit('build.yml must stay outside the four source ZIPs')
+                          raise SystemExit('build.yml must stay outside the three source ZIPs')
           print(f'Archive integrity OK: {len(seen)} unique files')
           PY
 
-          for n in 01 02 03 04; do
+          for n in 01 02 03; do
             unzip -q ".rostik_parts/${PYTHON_PREFIX}${n}.zip" -d .rostik_assembled
           done
 
@@ -408,33 +407,29 @@ jobs:
       - id: verify_release
         name: "15. Verify Release APK"
         shell: bash
-        continue-on-error: true
         run: |
-          set +e
+          set -euo pipefail
           APK=app/build/outputs/apk/release/app-release.apk
-          
-          if [[ ! -f "$APK" ]]; then
-            echo "❌ APK файл не найден: $APK"
-            exit 1
-          fi
-          
-          echo "✓ APK файл создан: $(ls -lh $APK)"
-          
-          # Проверяем наличие критичных файлов
-          if unzip -Z1 "$APK" | grep -q '^assets/apk_port/maps/brawl_ball_maps.json$'; then
-            echo "✓ Карты найдены в APK"
-          else
-            echo "⚠ Карты не найдены"
-          fi
-          
-          if unzip -Z1 "$APK" | grep -q '^assets/apk_port/brawler_icons/shelly.png$'; then
-            echo "✓ Иконки персонажей найдены"
-          else
-            echo "⚠ Иконки персонажей не найдены"
-          fi
-          
-          echo "RELEASE_APK_BUILD_SUCCESS: APK готов к использованию"
-          exit 0
+          test -f "$APK"
+          unzip -Z1 "$APK" | grep -q '^assets/apk_port/maps/brawl_ball_maps.json$'
+          unzip -Z1 "$APK" | grep -q '^assets/apk_port/brawler_icons/shelly.png$'
+          unzip -Z1 "$APK" | grep -q '^assets/apk_port/lobby/victory.png$'
+          python3 - "$APK" <<'PY'
+          import sys, zipfile
+          from pathlib import Path
+          names=set(zipfile.ZipFile(sys.argv[1]).namelist())
+          rows={}
+          for line in Path('app/src/main/assets/brawler_avatar_map.properties').read_text().splitlines():
+              if line.strip() and not line.lstrip().startswith('#'):
+                  k,v=line.split('=',1); rows[k]=v
+          assert len(rows)==108
+          missing=[]
+          for k,v in rows.items():
+              expected=f'assets/brawler_icons/{k}.png' if v.startswith('REMOTE|') else f'assets/apk_port/brawler_icons/{v}'
+              if expected not in names: missing.append((k,expected))
+          assert not missing, missing[:10]
+          print('RELEASE_APK_PASS: all 108 avatar mappings/fallbacks present')
+          PY
 
       - name: "16. Upload Debug + Release APKs"
         uses: actions/upload-artifact@v7
