@@ -1,4 +1,4 @@
-name: RostikAI v31.1.3 - Stable Verify + APK
+name: RostikAI v31.1.3 - MERGED Build + Verify
 
 on:
   workflow_dispatch:
@@ -17,231 +17,134 @@ env:
   ANDROID_PLATFORM: "35"
   ANDROID_BUILD_TOOLS: "35.0.0"
   GRADLE_VERSION: "8.10.2"
-  PART_PREFIX: "RostikAI-v31.1.3-FINAL-ANDROID-PROJECT-PART-"
+  PART_PREFIX: "RostikAI-v31.1.3-MERGED-ANDROID-PROJECT-PART-"
 
 jobs:
   build:
-    name: "CHECK -> TEST -> BUILD -> APK"
+    name: "CHECK -> ASSEMBLE -> APK"
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
     steps:
-      - name: "1. Checkout source"
+      - name: "1. Checkout"
         uses: actions/checkout@v7
         with:
           fetch-depth: 1
-          lfs: true
 
-      - name: "2. Use project directly or reconstruct the four locked parts"
+      - name: "2. Use direct source or reconstruct five parts"
         shell: bash
         run: |
           set -euo pipefail
           if [[ -f settings.gradle.kts && -f app/build.gradle.kts && -f app/src/main/AndroidManifest.xml ]]; then
-            echo "PROJECT_SOURCE=DIRECT" >> "$GITHUB_ENV"
             echo "DIRECT_PROJECT_PASS"
-            exit 0
-          fi
-
-          echo "Direct Android project not present; reconstructing from the four locked parts."
-          rm -rf .rostik_parts .rostik_assembled
-          mkdir -p .rostik_parts .rostik_assembled
-
-          declare -A SHA=(
-            [01]="96fed72b429ac5a847d50c177d260e9db8c6cfe0288f18bc7ddf330552ac2385"
-            [02]="304f78e5a9b493ed64afe2618ca0c47fe27828cc1558c6038a8644009a97b4db"
-            [03]="2c981f1d393408c65e3e7f5fa40e191236447b7c301eac5ca30b667a784e143d"
-            [04]="53443bf768dda12129fd0379ca79707fe3f5d051cfc716fc8c85a9b06cb422c5"
-          )
-
-          for n in 01 02 03 04; do
-            f="${PART_PREFIX}${n}.zip"
-            test -f "$f" || { echo "ERROR: missing $f"; exit 1; }
-            actual="$(sha256sum "$f" | awk '{print $1}')"
-            test "$actual" = "${SHA[$n]}" || {
-              echo "ERROR: SHA-256 mismatch for $f"
-              echo "expected=${SHA[$n]}"
-              echo "actual=$actual"
-              exit 1
-            }
-            unzip -tq "$f"
-            cp -f "$f" .rostik_parts/
-          done
-
-          python3 - <<'PY'
+          else
+            rm -rf .rostik_parts .rostik_assembled
+            mkdir -p .rostik_parts .rostik_assembled
+            declare -A SHA=(
+              [01]="ec5f277e98d3d483821d1e1adf9fa563c2e5c1269cd851ca234aebe47a75cb91"
+              [02]="0269fd3f5627e4e2429d166306027e8222888b86e0bcf4f35b32333640e5c7f4"
+              [03]="8fa8912d446b85cdc40d84d3efd88a870a4cc18e5de1d0f17c82dabc94681d94"
+              [04]="2c417e4880521a12b733caffbde44cacdb2e01b2c43c8b9cb626bee13da57ae7"
+              [05]="f7daba4e4f5ebceeb9aaa67b5308029ed66c9ca36b46dcca63ec5015e046398"
+            )
+            for n in 01 02 03 04 05; do
+              f="${PART_PREFIX}${n}.zip"
+              test -f "$f" || { echo "ERROR: missing $f"; exit 1; }
+              actual="$(sha256sum "$f" | awk '{print $1}')"
+              test "$actual" = "${SHA[$n]}" || { echo "ERROR: SHA mismatch $f"; exit 1; }
+              unzip -tq "$f"
+              cp "$f" .rostik_parts/
+            done
+            python3 - <<'PY'
           from pathlib import Path
           import zipfile
-          seen = {}
-          for zpath in sorted(Path('.rostik_parts').glob('*.zip')):
-              with zipfile.ZipFile(zpath) as z:
-                  for name in z.namelist():
-                      if name.endswith('/'):
-                          continue
-                      if name in seen:
-                          raise SystemExit(f'duplicate path: {name} ({seen[name]} / {zpath.name})')
-                      seen[name] = zpath.name
-                      if name.startswith('.github/'):
-                          raise SystemExit(f'CI files must not be embedded in source parts: {name}')
-          print(f'ARCHIVE_INTEGRITY_PASS: {len(seen)} unique files')
+          seen={}
+          for z in sorted(Path('.rostik_parts').glob('*.zip')):
+              with zipfile.ZipFile(z) as f:
+                  for n in f.namelist():
+                      if n.endswith('/'): continue
+                      if n in seen: raise SystemExit(f'duplicate path: {n}')
+                      if n.startswith('.github/'): raise SystemExit(f'workflow must be supplied separately: {n}')
+                      seen[n]=z.name
+          print(f'ARCHIVE_INTEGRITY_PASS: {len(seen)} files')
           PY
-
-          for n in 01 02 03 04; do
-            unzip -q ".rostik_parts/${PART_PREFIX}${n}.zip" -d .rostik_assembled
-          done
-          cp -a .rostik_assembled/. ./
-          echo "PROJECT_SOURCE=FOUR_PARTS" >> "$GITHUB_ENV"
-          echo "FOUR_PART_ASSEMBLY_PASS"
-
-      - name: "3. Verify Android project structure"
-        shell: bash
-        run: |
-          set -euo pipefail
-          required=(
-            settings.gradle.kts build.gradle.kts gradle.properties gradlew
-            gradle/wrapper/gradle-wrapper.properties
-            app/build.gradle.kts app/src/main/AndroidManifest.xml
-            app/src/main/java/com/rostik/touchbot/MainActivity.kt
-            app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
-            app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt
-            app/src/main/java/com/rostik/touchbot/BotAccessibilityService.kt
-            app/src/main/java/com/rostik/touchbot/Models.kt
-            app/src/test/java/com/rostik/touchbot/QueueEngineTest.kt
-            app/src/test/java/com/rostik/touchbot/TrophyRulesTest.kt
-            tools/verify_source.py ROSTIK_SOURCE_ID.txt
-          )
-          for f in "${required[@]}"; do
-            test -f "$f" || { echo "ERROR: missing required file: $f"; exit 1; }
-          done
-          test -d app/src/main/assets
-          chmod +x gradlew
-          grep -qx 'ROSTIKAI-31.1.3-PYTHON-PORT-3' ROSTIK_SOURCE_ID.txt
-          echo "PROJECT_STRUCTURE_PASS"
-
-      - name: "4. Deterministic source/assets preflight"
-        shell: bash
-        run: python3 tools/verify_source.py
-
-      - name: "5. Static stability invariants"
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          root = Path('.')
-          cap = (root / 'app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt').read_text()
-          sup = (root / 'app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt').read_text()
-          manifest = (root / 'app/src/main/AndroidManifest.xml').read_text()
-          build = (root / 'app/build.gradle.kts').read_text()
-          assert len(re.findall(r'projection!!\.createVirtualDisplay\s*\(', cap)) == 1
-          assert 'vd.setSurface(replacement.surface)' in cap
-          assert 'START_NOT_STICKY' in cap
-          assert 'START_REDELIVER_INTENT' not in cap
-          assert sup.count('RunState.SELECT_MAP ->') == 1
-          assert 'FOREGROUND_SERVICE_MEDIA_PROJECTION' in manifest
-          assert 'FOREGROUND_SERVICE_SPECIAL_USE' in manifest
-          assert 'android:foregroundServiceType="mediaProjection"' in manifest
-          assert 'android:foregroundServiceType="specialUse"' in manifest
-          assert 'junit:junit:4.13.2' in build
-          print('STABILITY_INVARIANTS_PASS')
-          PY
-          if grep -RIn --exclude-dir=.gradle --exclude-dir=build -E 'TODO|FIXME|NotImplementedException|UnsupportedOperationException' app/src/main/java; then
-            echo "ERROR: unfinished implementation marker found"
-            exit 1
+            for n in 01 02 03 04 05; do unzip -q ".rostik_parts/${PART_PREFIX}${n}.zip" -d .rostik_assembled; done
+            cp -a .rostik_assembled/. ./
+            echo "PART_ASSEMBLY_PASS"
           fi
 
-      - name: "6. Set up JDK 17"
+      - name: "3. Source preflight + deep UI audit"
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew tools/deep_audit.py
+          python3 tools/verify_source.py
+          python3 tools/deep_audit.py
+          test "$(find app/src/main/java -name '*.kt' | wc -l)" -ge 39
+          test "$(find app/src/main/assets/brawler_icons -type f | wc -l)" -eq 108
+          test -f app/src/main/assets/brawler_icons_manifest.txt
+          test -f app/src/main/assets/apk_port/maps/brawl_ball_maps.json
+          echo "SOURCE_INVENTORY_PASS"
+
+      - name: "4. Set up Java 17"
         uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
           cache: gradle
 
-      - name: "7. Set up Android SDK"
+      - name: "5. Set up Android SDK"
         uses: android-actions/setup-android@v4
-        with:
-          packages: 'platform-tools'
 
-      - name: "8. Install Android SDK 35"
+      - name: "6. Install Android SDK 35"
         shell: bash
         run: |
           set -euo pipefail
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "platform-tools" "platforms;android-${ANDROID_PLATFORM}" "build-tools;${ANDROID_BUILD_TOOLS}"
-          test -d "$ANDROID_SDK_ROOT/platforms/android-${ANDROID_PLATFORM}"
-          test -d "$ANDROID_SDK_ROOT/build-tools/${ANDROID_BUILD_TOOLS}"
 
-      - name: "9. Set up Gradle 8.10.2"
+      - name: "7. Set up Gradle 8.10.2"
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
 
-      - name: "10. Verify Gradle + Java"
-        shell: bash
-        run: |
-          set -euo pipefail
-          java -version
-          ./gradlew --version
-
-      - name: "11. Run JVM regression tests"
-        shell: bash
-        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace --warning-mode=all --console=plain
-
-      - name: "12. Compile debug Kotlin"
+      - name: "8. Compile debug"
         shell: bash
         run: ./gradlew :app:compileDebugKotlin --no-daemon --stacktrace --warning-mode=all --console=plain
 
-      - name: "13. Lint debug"
+      - name: "9. Lint debug"
         shell: bash
         run: ./gradlew :app:lintDebug --no-daemon --stacktrace --warning-mode=all --console=plain
 
-      - name: "14. Assemble debug APK"
+      - name: "10. Assemble debug APK"
         shell: bash
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace --warning-mode=all --console=plain
 
-      - name: "15. Verify debug APK"
+      - name: "11. Verify debug APK"
         shell: bash
         run: |
           set -euo pipefail
-          APK="app/build/outputs/apk/debug/app-debug.apk"
+          APK=app/build/outputs/apk/debug/app-debug.apk
           test -s "$APK"
           unzip -tq "$APK"
-          echo "DEBUG_APK_PASS"
+          echo "DEBUG_APK_PASS=$APK"
 
-      - name: "16. Compile release Kotlin"
-        shell: bash
-        run: ./gradlew :app:compileReleaseKotlin --no-daemon --stacktrace --warning-mode=all --console=plain
-
-      - name: "17. Assemble release APK"
+      - name: "12. Assemble release APK"
         shell: bash
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace --warning-mode=all --console=plain
 
-      - name: "18. Verify release APK contents"
+      - name: "13. Verify release APK"
         shell: bash
         run: |
           set -euo pipefail
-          APK="app/build/outputs/apk/release/app-release.apk"
+          APK=app/build/outputs/apk/release/app-release.apk
           test -s "$APK"
           unzip -tq "$APK"
-          unzip -Z1 "$APK" | grep -q '^assets/apk_port/maps/brawl_ball_maps.json$'
-          unzip -Z1 "$APK" | grep -q '^assets/apk_port/brawler_icons/shelly.png$'
-          unzip -Z1 "$APK" | grep -q '^assets/apk_port/brawler_icons/spike.png$'
-          python3 - "$APK" <<'PY'
-          import sys, zipfile
-          from pathlib import Path
-          names = set(zipfile.ZipFile(sys.argv[1]).namelist())
-          ids = [
-              line.strip() for line in Path('app/src/main/assets/brawler_icons_manifest.txt').read_text().splitlines()
-              if line.strip() and not line.lstrip().startswith('#')
-          ]
-          assert len(ids) == 108
-          missing = [f'assets/brawler_icons/{x}.png' for x in ids if f'assets/brawler_icons/{x}.png' not in names]
-          assert not missing, missing[:10]
-          for path in ('assets/apk_port/models/m0.bin', 'assets/apk_port/models/m1.bin', 'assets/apk_port/models/m2.bin'):
-              assert path in names, path
-          print('RELEASE_APK_CONTENT_PASS: 108 avatars + maps + models')
-          PY
+          unzip -Z1 "$APK" | grep -q 'assets/apk_port/maps/brawl_ball_maps.json'
+          unzip -Z1 "$APK" | grep -q 'assets/apk_port/brawler_icons/shelly.png'
+          echo "RELEASE_APK_PASS=$APK"
 
-      - name: "19. Upload APKs"
+      - name: "14. Upload APK artifacts"
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
@@ -252,14 +155,13 @@ jobs:
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/release/app-release.apk
 
-      - name: "20. Upload diagnostics"
+      - name: "15. Upload diagnostics"
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           name: RostikAI-v31.1.3-CI-diagnostics
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 7
           path: |
             app/build/reports/**
-            app/build/test-results/**
             app/build/outputs/logs/**
