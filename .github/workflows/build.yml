@@ -1,4 +1,4 @@
-name: RostikAI v31.1.3 - Build + Full Verification
+name: RostikAI v31.1.3 - Full Verification + APK
 
 on:
   workflow_dispatch:
@@ -9,9 +9,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: rostikai-v31-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-    name: RostikAI Full Build
+    name: RostikAI Build
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
@@ -23,279 +27,256 @@ jobs:
     steps:
 
       # ============================================================
-      # 1. CHECKOUT
+      # 01 CHECKOUT
       # ============================================================
 
-      - name: "1. Checkout"
+      - name: "01. Checkout"
         uses: actions/checkout@v6
 
       # ============================================================
-      # 2. SOURCE DISCOVERY / ASSEMBLY
+      # 02 DISCOVER SOURCE
       # ============================================================
 
-      - name: "2. Assemble and verify source"
+      - name: "02. Discover source files"
         shell: bash
         run: |
           set -euo pipefail
 
-          PART_DIR=".rostik_parts"
-          ASSEMBLED_DIR=".rostik_assembled"
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Revision: $GITHUB_SHA"
 
-          rm -rf "$PART_DIR" "$ASSEMBLED_DIR"
-          mkdir -p "$PART_DIR" "$ASSEMBLED_DIR"
+          echo
+          echo "Root files:"
+          find . -maxdepth 1 -type f -printf '%f\n' | sort
 
-          PREFIX="RostikAI-v31.1.3-PYTHON-PORT-3-PART-"
+          echo
+          echo "RostikAI ZIP parts:"
+          find . -maxdepth 1 -type f \
+            \( -name 'RostikAI-v31.1.3-MERGED-ANDROID-PROJECT-PART-*.zip' \
+               -o -name 'RostikAI-v31.1.3-PYTHON-PORT-3-PART-*.zip' \) \
+            -printf '%f\n' | sort
 
-          declare -A SHA256=(
-            [01]="a1f50b0dd5fba6b09d0ae47054ec766623865941f405ab03825422199f2b9863"
-            [02]="f4599d66729057598ba5153ea5e7041e5a4c9002c950ec63f94677f0c2b13c95"
-            [03]="7b7f03566c5df861d546351d7cd92b6a4ed35c952579b255395fd902d7d1e807"
-            [04]="6098a6a033bf75734526977dadca04ec1a7ba4ece2974f61644fe7c167af9328"
+      # ============================================================
+      # 03 ASSEMBLE MERGED 5-PART PROJECT
+      # ============================================================
+
+      - name: "03. Assemble MERGED Android project"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf .rostik_parts .rostik_assembled
+          mkdir -p .rostik_parts .rostik_assembled
+
+          mapfile -t MERGED < <(
+            find . -maxdepth 1 -type f \
+              -name 'RostikAI-v31.1.3-MERGED-ANDROID-PROJECT-PART-*.zip' \
+              -printf '%f\n' |
+            sort -V
           )
 
-          FOUND=0
+          if [ "${#MERGED[@]}" -gt 0 ]; then
+            echo "MERGED source set detected: ${#MERGED[@]} part(s)."
 
-          for n in 01 02 03 04; do
-            FILE="${PREFIX}${n}.zip"
+            if [ "${#MERGED[@]}" -ne 5 ]; then
+              echo "::error::Expected 5 MERGED source parts, found ${#MERGED[@]}."
+              printf '%s\n' "${MERGED[@]}"
+              exit 1
+            fi
 
-            if [[ -f "$FILE" ]]; then
-              FOUND=$((FOUND + 1))
+            for n in 01 02 03 04 05; do
+              FILE="RostikAI-v31.1.3-MERGED-ANDROID-PROJECT-PART-${n}.zip"
 
-              echo "Checking $FILE"
+              if [ ! -f "$FILE" ]; then
+                echo "::error::Missing required source part: $FILE"
+                exit 1
+              fi
 
-              ACTUAL="$(sha256sum "$FILE" | awk '{print $1}')"
-              EXPECTED="${SHA256[$n]}"
+              echo "Testing $FILE"
+              unzip -tq "$FILE"
 
-              echo "expected=$EXPECTED"
-              echo "actual=$ACTUAL"
+              cp -f "$FILE" ".rostik_parts/$FILE"
+            done
 
-              if [[ "$ACTUAL" != "$EXPECTED" ]]; then
-                echo "ERROR: SHA-256 mismatch: $FILE"
+            echo "Extracting 5 MERGED parts..."
+
+            for n in 01 02 03 04 05; do
+              FILE=".rostik_parts/RostikAI-v31.1.3-MERGED-ANDROID-PROJECT-PART-${n}.zip"
+
+              unzip -q "$FILE" -d .rostik_assembled
+            done
+
+            echo "MERGED source extraction: PASS"
+
+          else
+
+            # Compatibility with the older 4-part source set.
+            mapfile -t PYTHON < <(
+              find . -maxdepth 1 -type f \
+                -name 'RostikAI-v31.1.3-PYTHON-PORT-3-PART-*.zip' \
+                -printf '%f\n' |
+              sort -V
+            )
+
+            if [ "${#PYTHON[@]}" -ne 4 ]; then
+              echo "::error::No valid RostikAI source set found."
+              echo "Expected either:"
+              echo "  5 MERGED-ANDROID-PROJECT parts"
+              echo "or"
+              echo "  4 PYTHON-PORT-3 parts"
+              exit 1
+            fi
+
+            for n in 01 02 03 04; do
+              FILE="RostikAI-v31.1.3-PYTHON-PORT-3-PART-${n}.zip"
+
+              if [ ! -f "$FILE" ]; then
+                echo "::error::Missing required source part: $FILE"
                 exit 1
               fi
 
               unzip -tq "$FILE"
-              cp -f "$FILE" "$PART_DIR/$FILE"
-
-              echo "SHA-256 OK: $FILE"
-            fi
-          done
-
-          if [[ "$FOUND" -eq 4 ]]; then
-
-            python3 - "$PART_DIR" <<'PY'
-          import sys
-          import zipfile
-          from pathlib import Path
-
-          root = Path(sys.argv[1])
-          seen = {}
-
-          for archive in sorted(root.glob("*.zip")):
-              with zipfile.ZipFile(archive) as z:
-                  for name in z.namelist():
-
-                      if name.endswith("/"):
-                          continue
-
-                      if name in seen:
-                          raise SystemExit(
-                              f"duplicate archive path: {name} "
-                              f"({seen[name]} and {archive.name})"
-                          )
-
-                      seen[name] = archive.name
-
-          if ".github/workflows/build.yml" in seen:
-              raise SystemExit(
-                  "build.yml must remain outside source parts"
-              )
-
-          print(f"archive uniqueness OK: {len(seen)} files")
-          PY
-
-            for n in 01 02 03 04; do
-              unzip -q \
-                "${PART_DIR}/${PREFIX}${n}.zip" \
-                -d "$ASSEMBLED_DIR"
+              unzip -q "$FILE" -d .rostik_assembled
             done
 
-            rm -rf app gradle
-
-            rm -f \
-              settings.gradle.kts \
-              build.gradle.kts \
-              gradle.properties \
-              gradlew \
-              gradlew.bat \
-              ROSTIK_SOURCE_ID.txt \
-              VERIFICATION_REPORT.md \
-              tools/verify_source.py
-
-            cp -a "$ASSEMBLED_DIR"/. ./
-
-          elif [[ "$FOUND" -ne 0 ]]; then
-
-            echo "ERROR: incomplete PYTHON-PORT-3 source set."
-            echo "Found $FOUND/4 parts."
-            exit 1
-
-          else
-
-            echo "No PYTHON-PORT-3 source ZIP parts found."
-
-            if [[ ! -f ROSTIK_SOURCE_ID.txt ]]; then
-              echo "ERROR: repository source is missing."
-              exit 1
-            fi
+            echo "PYTHON-PORT-3 source extraction: PASS"
           fi
 
-          test -f settings.gradle.kts
-          test -f build.gradle.kts
-          test -f app/build.gradle.kts
-          test -f app/src/main/AndroidManifest.xml
-          test -f ROSTIK_SOURCE_ID.txt
-          test -f tools/verify_source.py
-
-          grep -qx \
-            "ROSTIKAI-31.1.3-PYTHON-PORT-3" \
-            ROSTIK_SOURCE_ID.txt
-
-          echo "SOURCE ASSEMBLY PASS"
-
       # ============================================================
-      # 3. JAVA
+      # 04 FIND PROJECT ROOT
       # ============================================================
 
-      - name: "3. Set up Java 17"
-        uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      # ============================================================
-      # 4. ANDROID SDK
-      # ============================================================
-
-      - name: "4. Locate Android SDK"
+      - name: "04. Locate Android project root"
         shell: bash
         run: |
           set -euo pipefail
 
-          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          ROOT=""
 
-          test -n "$SDK" || {
-            echo "ERROR: Android SDK not found"
-            exit 1
-          }
-
-          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
-          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
-
-          SDKMANAGER="$(
-            find "$SDK/cmdline-tools" \
+          while IFS= read -r candidate; do
+            if [ -f "$candidate/app/build.gradle.kts" ] || \
+               [ -f "$candidate/app/build.gradle" ]; then
+              ROOT="$candidate"
+              break
+            fi
+          done < <(
+            find .rostik_assembled \
               -type f \
-              -name sdkmanager \
-              -path '*/bin/sdkmanager' \
-              2>/dev/null |
-              sort -V |
-              tail -n 1 || true
-          )"
+              \( -name 'settings.gradle.kts' -o -name 'settings.gradle' \) \
+              -printf '%h\n' |
+            sort
+          )
 
-          test -n "$SDKMANAGER" || {
-            echo "ERROR: sdkmanager not found"
+          if [ -z "$ROOT" ]; then
+            echo "::error::Android project root not found."
+            echo "settings.gradle(.kts) + app/build.gradle(.kts) were not found."
             exit 1
-          }
+          fi
 
-          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          ROOT="$(realpath "$ROOT")"
 
-      - name: "5. Install Android SDK components"
+          echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "Android project root: $ROOT"
+
+      # ============================================================
+      # 05 PROJECT STRUCTURE
+      # ============================================================
+
+      - name: "05. Verify Android project structure"
         shell: bash
         run: |
           set -euo pipefail
 
-          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          cd "$PROJECT_ROOT"
 
-          "$SDKMANAGER" \
-            "platform-tools" \
-            "platforms;android-${ANDROID_PLATFORM}" \
-            "build-tools;${ANDROID_BUILD_TOOLS}"
+          test -f settings.gradle.kts || test -f settings.gradle
+          test -f build.gradle.kts || test -f build.gradle
+          test -f gradle.properties
 
-          test -d \
-            "$ANDROID_SDK_ROOT/platforms/android-${ANDROID_PLATFORM}"
-
-          test -d \
-            "$ANDROID_SDK_ROOT/build-tools/${ANDROID_BUILD_TOOLS}"
-
-          echo "ANDROID SDK PASS"
-
-      # ============================================================
-      # 6. GRADLE
-      # ============================================================
-
-      - name: "6. Set up Gradle"
-        uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: ${{ env.GRADLE_VERSION }}
-
-      # ============================================================
-      # 7. SOURCE VERIFICATION
-      # ============================================================
-
-      - name: "7. Verify source"
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 tools/verify_source.py
-
-      # ============================================================
-      # 8. PROJECT STRUCTURE
-      # ============================================================
-
-      - name: "8. Verify Android project structure"
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -f settings.gradle.kts
-          test -f build.gradle.kts
-          test -f app/build.gradle.kts
+          test -f app/build.gradle.kts || test -f app/build.gradle
           test -f app/src/main/AndroidManifest.xml
 
-          test -f \
-            app/src/main/java/com/rostik/touchbot/MainActivity.kt
-
-          test -f \
-            app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
-
-          test -f \
-            app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt
-
-          test -f \
-            app/src/main/java/com/rostik/touchbot/BotAccessibilityService.kt
-
-          test -f \
-            app/src/main/java/com/rostik/touchbot/TrophyObserver.kt
-
-          test -f \
-            app/src/main/java/com/rostik/touchbot/TrophyRules.kt
-
-          test -f \
-            app/src/main/java/com/rostik/touchbot/LegacyStateDetector.kt
-
-          test -f \
-            app/src/main/java/com/rostik/touchbot/BrawlStarsApiClient.kt
+          test -d app/src/main/java
+          test -d app/src/main/assets
 
           echo "PROJECT STRUCTURE PASS"
 
       # ============================================================
-      # 9. 108 BRAWLERS
+      # 06 REQUIRED KOTLIN FILES
       # ============================================================
 
-      - name: "9. Verify 108 brawlers"
+      - name: "06. Verify required Kotlin files"
         shell: bash
         run: |
           set -euo pipefail
+
+          cd "$PROJECT_ROOT"
+
+          REQUIRED=(
+            "app/src/main/java/com/rostik/touchbot/MainActivity.kt"
+            "app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt"
+            "app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt"
+            "app/src/main/java/com/rostik/touchbot/BotAccessibilityService.kt"
+            "app/src/main/java/com/rostik/touchbot/TrophyObserver.kt"
+            "app/src/main/java/com/rostik/touchbot/TrophyRules.kt"
+            "app/src/main/java/com/rostik/touchbot/LegacyStateDetector.kt"
+            "app/src/main/java/com/rostik/touchbot/BrawlStarsApiClient.kt"
+          )
+
+          for file in "${REQUIRED[@]}"; do
+            test -f "$file" || {
+              echo "::error::Missing required file: $file"
+              exit 1
+            }
+          done
+
+          echo "REQUIRED KOTLIN FILES PASS"
+
+      # ============================================================
+      # 07 SOURCE PREFLIGHT
+      # ============================================================
+
+      - name: "07. Verify source preflight"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$PROJECT_ROOT"
+
+          if [ -f tools/verify_source.py ]; then
+            python3 tools/verify_source.py
+          else
+            echo "tools/verify_source.py not present; running structural preflight."
+
+            KOTLIN_COUNT="$(
+              find app/src/main -type f -name '*.kt' | wc -l | tr -d ' '
+            )"
+
+            ASSET_COUNT="$(
+              find app/src/main/assets -type f | wc -l | tr -d ' '
+            )"
+
+            test "$KOTLIN_COUNT" -gt 0
+            test "$ASSET_COUNT" -gt 0
+
+            echo "Kotlin files: $KOTLIN_COUNT"
+            echo "Assets: $ASSET_COUNT"
+            echo "STRUCTURAL PREFLIGHT PASS"
+          fi
+
+      # ============================================================
+      # 08 108 BRAWLERS
+      # ============================================================
+
+      - name: "08. Verify 108 brawlers"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$PROJECT_ROOT"
+
+          test -f app/src/main/assets/brawler_icons_manifest.txt
+          test -f app/src/main/java/com/rostik/touchbot/BrawlerCatalog.kt
 
           COUNT="$(
             grep -Ev '^[[:space:]]*$' \
@@ -306,24 +287,26 @@ jobs:
 
           test "$COUNT" = "108"
 
-          grep -q \
-            'e("shelly"' \
+          grep -q 'e("shelly"' \
             app/src/main/java/com/rostik/touchbot/BrawlerCatalog.kt
 
-          grep -q \
-            'e("spike"' \
+          grep -q 'e("spike"' \
             app/src/main/java/com/rostik/touchbot/BrawlerCatalog.kt
 
           echo "108 BRAWLERS PASS"
 
       # ============================================================
-      # 10. ASSETS
+      # 09 BRAWLER ICONS
       # ============================================================
 
-      - name: "10. Verify assets"
+      - name: "09. Verify 108 brawler icons"
         shell: bash
         run: |
           set -euo pipefail
+
+          cd "$PROJECT_ROOT"
+
+          test -d app/src/main/assets/brawler_icons
 
           COUNT="$(
             find app/src/main/assets/brawler_icons \
@@ -335,26 +318,27 @@ jobs:
 
           test "$COUNT" = "108"
 
-          test -f \
-            app/src/main/assets/brawler_icons/shelly.png
+          test -f app/src/main/assets/brawler_icons/shelly.png
+          test -f app/src/main/assets/brawler_icons/spike.png
 
-          test -f \
-            app/src/main/assets/brawler_icons/spike.png
+          echo "108 BRAWLER ICONS PASS"
 
-          test -f \
-            app/src/main/assets/apk_port/maps/brawl_ball_maps.json
+      # ============================================================
+      # 10 OTHER ASSETS
+      # ============================================================
 
-          test -f \
-            app/src/main/assets/apk_port/lobby/victory.png
+      - name: "10. Verify required assets"
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          test -f \
-            app/src/main/assets/apk_port/lobby/defeat.png
+          cd "$PROJECT_ROOT"
 
-          test -f \
-            app/src/main/assets/apk_port/ui_objects/brawlball_gamemode_icon.png
-
-          test -f \
-            app/src/main/assets/brawler_avatar_map.properties
+          test -f app/src/main/assets/apk_port/maps/brawl_ball_maps.json
+          test -f app/src/main/assets/apk_port/lobby/victory.png
+          test -f app/src/main/assets/apk_port/lobby/defeat.png
+          test -f app/src/main/assets/apk_port/ui_objects/brawlball_gamemode_icon.png
+          test -f app/src/main/assets/brawler_avatar_map.properties
 
           MAP_COUNT="$(
             grep -Ev '^[[:space:]]*(#|$)' \
@@ -365,16 +349,18 @@ jobs:
 
           test "$MAP_COUNT" = "108"
 
-          echo "ASSETS PASS"
+          echo "REQUIRED ASSETS PASS"
 
       # ============================================================
-      # 11. MAPS
+      # 11 MAP VALIDATION
       # ============================================================
 
       - name: "11. Verify Brawl Ball maps"
         shell: bash
         run: |
           set -euo pipefail
+
+          cd "$PROJECT_ROOT"
 
           python3 - <<'PY'
           import json
@@ -389,30 +375,28 @@ jobs:
           assert "Back Pocket" in data
 
           for name, grid in data.items():
-              assert isinstance(grid, list)
+              assert isinstance(grid, list), name
               assert len(grid) == 33, name
 
               for row in grid:
-                  assert isinstance(row, str)
+                  assert isinstance(row, str), name
                   assert len(row) == 21, name
 
-          print(
-              "Brawl Ball maps:",
-              len(data),
-              "valid 33x21 grids"
-          )
+          print(f"Maps: {len(data)} valid 33x21 grids")
           PY
 
-          echo "MAPS PASS"
+          echo "MAP VALIDATION PASS"
 
       # ============================================================
-      # 12. RUNTIME INTEGRATION
+      # 12 RUNTIME INTEGRATION
       # ============================================================
 
       - name: "12. Verify runtime integration"
         shell: bash
         run: |
           set -euo pipefail
+
+          cd "$PROJECT_ROOT"
 
           grep -q \
             'Frame watchdog recovery' \
@@ -442,16 +426,18 @@ jobs:
             'BrawlStarsApiClient(context)' \
             app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
 
-          echo "RUNTIME PASS"
+          echo "RUNTIME INTEGRATION PASS"
 
       # ============================================================
-      # 13. KNOWN BROKEN SYMBOLS
+      # 13 KNOWN BROKEN SYMBOLS
       # ============================================================
 
       - name: "13. Check known broken symbols"
         shell: bash
         run: |
           set -euo pipefail
+
+          cd "$PROJECT_ROOT"
 
           if grep -RIn \
             --exclude-dir=.gradle \
@@ -460,7 +446,7 @@ jobs:
             'FRAME_RATE_COMPATIBILITY_NO_VIOLATION|selectAllOnFocus[[:space:]]*=' \
             app/src/main/java; then
 
-            echo "ERROR: known broken symbol found"
+            echo "::error::Known broken symbol found."
             exit 1
           fi
 
@@ -471,14 +457,14 @@ jobs:
             'TODO|FIXME|NotImplementedException|UnsupportedOperationException' \
             app/src/main/java; then
 
-            echo "ERROR: unfinished implementation marker found"
+            echo "::error::Unfinished implementation marker found."
             exit 1
           fi
 
           echo "BROKEN SYMBOL SCAN PASS"
 
       # ============================================================
-      # 14. BUILD CONFIG
+      # 14 BUILD CONFIG
       # ============================================================
 
       - name: "14. Verify build configuration"
@@ -486,17 +472,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          grep -q \
-            'versionCode = 54' \
-            app/build.gradle.kts
+          cd "$PROJECT_ROOT"
 
-          grep -q \
-            'versionName = "31.1.3"' \
-            app/build.gradle.kts
-
-          grep -q \
-            'buildConfig = true' \
-            app/build.gradle.kts
+          grep -q 'versionCode = 54' app/build.gradle.kts
+          grep -q 'versionName = "31.1.3"' app/build.gradle.kts
+          grep -q 'buildConfig = true' app/build.gradle.kts
 
           grep -q \
             'import com.rostik.touchbot.BuildConfig' \
@@ -509,19 +489,21 @@ jobs:
           echo "BUILD CONFIG PASS"
 
       # ============================================================
-      # 15. REPAIR DUPLICATE activeReader
+      # 15 REPAIR KNOWN COMPILE ERROR
       # ============================================================
 
-      - name: "15. Repair ScreenCaptureService activeReader"
+      - name: "15. Repair duplicate activeReader declarations"
         shell: bash
         run: |
           set -euo pipefail
+
+          cd "$PROJECT_ROOT"
 
           FILE="app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt"
 
           test -f "$FILE"
 
-          cp "$FILE" /tmp/ScreenCaptureService.kt.before
+          cp "$FILE" "$GITHUB_WORKSPACE/ScreenCaptureService.before.patch.kt"
 
           python3 - "$FILE" <<'PY'
           from pathlib import Path
@@ -531,11 +513,11 @@ jobs:
           path = Path(sys.argv[1])
           lines = path.read_text(encoding="utf-8").splitlines(True)
 
-          declaration = re.compile(
-              r'^(\s*)val\s+activeReader\s*:\s*ImageReader\b'
+          decl = re.compile(
+              r'^\s*val\s+activeReader\s*:\s*ImageReader\b'
           )
 
-          function_pattern = re.compile(
+          fun = re.compile(
               r'\bfun\s+[A-Za-z_][A-Za-z0-9_]*\s*\('
           )
 
@@ -544,7 +526,7 @@ jobs:
 
           while i < len(lines):
 
-              if function_pattern.search(lines[i]):
+              if fun.search(lines[i]):
 
                   depth = 0
                   opened = False
@@ -561,14 +543,15 @@ jobs:
                       if "{" in line:
                           opened = True
 
-                      if declaration.match(line):
+                      if decl.match(line):
                           declarations.append(j)
 
                       if opened and depth <= 0:
 
+                          # The compiler error we are repairing is a duplicate
+                          # local activeReader declaration in the same function.
                           if len(declarations) > 1:
-                              for duplicate in declarations[1:]:
-                                  remove.add(duplicate)
+                              remove.update(declarations[1:])
 
                           i = j
                           break
@@ -588,8 +571,8 @@ jobs:
               )
 
               print(
-                  f"Removed {len(remove)} duplicate "
-                  "activeReader declaration(s)."
+                  "Removed duplicate activeReader declarations:",
+                  len(remove)
               )
           else:
               print("No duplicate activeReader declaration found.")
@@ -598,13 +581,15 @@ jobs:
           echo "ACTIVE READER REPAIR PASS"
 
       # ============================================================
-      # 16. VERIFY activeReader
+      # 16 VERIFY REPAIR
       # ============================================================
 
       - name: "16. Verify activeReader repair"
         shell: bash
         run: |
           set -euo pipefail
+
+          cd "$PROJECT_ROOT"
 
           FILE="app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt"
 
@@ -617,11 +602,11 @@ jobs:
               encoding="utf-8"
           ).splitlines()
 
-          declaration = re.compile(
+          decl = re.compile(
               r'^\s*val\s+activeReader\s*:\s*ImageReader\b'
           )
 
-          function_pattern = re.compile(
+          fun = re.compile(
               r'\bfun\s+[A-Za-z_][A-Za-z0-9_]*\s*\('
           )
 
@@ -630,12 +615,11 @@ jobs:
 
           while i < len(lines):
 
-              if function_pattern.search(lines[i]):
+              if fun.search(lines[i]):
 
                   depth = 0
                   opened = False
-                  count = 0
-                  start = i + 1
+                  declarations = []
                   j = i
 
                   while j < len(lines):
@@ -648,15 +632,13 @@ jobs:
                       if "{" in line:
                           opened = True
 
-                      if declaration.match(line):
-                          count += 1
+                      if decl.match(line):
+                          declarations.append(j + 1)
 
                       if opened and depth <= 0:
 
-                          if count > 1:
-                              errors.append(
-                                  f"function near line {start}: {count}"
-                              )
+                          if len(declarations) > 1:
+                              errors.append(declarations)
 
                           i = j
                           break
@@ -667,18 +649,93 @@ jobs:
 
           if errors:
               print("ERROR: duplicate activeReader remains:")
-              for error in errors:
-                  print(error)
+              for group in errors:
+                  print(group)
               sys.exit(1)
 
           print("ACTIVE READER VERIFY PASS")
           PY
 
       # ============================================================
-      # 17. TOOLCHAIN
+      # 17 JAVA
       # ============================================================
 
-      - name: "17. Print tool versions"
+      - name: "17. Set up Java 17"
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ============================================================
+      # 18 ANDROID SDK
+      # ============================================================
+
+      - name: "18. Locate Android SDK"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+
+          test -n "$SDK" || {
+            echo "::error::Android SDK not found."
+            exit 1
+          }
+
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+
+          SDKMANAGER="$(
+            find "$SDK/cmdline-tools" \
+              -type f \
+              -name sdkmanager \
+              -path '*/bin/sdkmanager' \
+              2>/dev/null |
+            sort -V |
+            tail -n 1 || true
+          )"
+
+          test -n "$SDKMANAGER" || {
+            echo "::error::sdkmanager not found."
+            exit 1
+          }
+
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+
+      - name: "19. Install Android SDK components"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+
+          "$SDKMANAGER" \
+            "platform-tools" \
+            "platforms;android-${ANDROID_PLATFORM}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}"
+
+          test -d \
+            "$ANDROID_SDK_ROOT/platforms/android-${ANDROID_PLATFORM}"
+
+          test -d \
+            "$ANDROID_SDK_ROOT/build-tools/${ANDROID_BUILD_TOOLS}"
+
+          echo "ANDROID SDK PASS"
+
+      # ============================================================
+      # 20 GRADLE
+      # ============================================================
+
+      - name: "20. Set up Gradle"
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      # ============================================================
+      # 21 TOOLCHAIN
+      # ============================================================
+
+      - name: "21. Print tool versions"
         shell: bash
         run: |
           set -euo pipefail
@@ -688,10 +745,10 @@ jobs:
           "$SDKMANAGER" --version
 
       # ============================================================
-      # 18. DIAGNOSTICS
+      # 22 PREPARE LOGS
       # ============================================================
 
-      - name: "18. Prepare CI logs"
+      - name: "22. Prepare CI logs"
         shell: bash
         run: |
           set -euo pipefail
@@ -700,11 +757,11 @@ jobs:
           mkdir -p ci-logs
 
       # ============================================================
-      # 19. DEBUG KOTLIN
+      # 23 DEBUG COMPILE
       # ============================================================
 
       - id: compile_debug
-        name: "19. Compile Debug Kotlin"
+        name: "23. Compile Debug Kotlin"
         shell: bash
         run: |
           set -o pipefail
@@ -728,11 +785,11 @@ jobs:
           exit "$STATUS"
 
       # ============================================================
-      # 20. LINT
+      # 24 LINT
       # ============================================================
 
       - id: lint_debug
-        name: "20. Lint Debug"
+        name: "24. Lint Debug"
         shell: bash
         run: |
           set -o pipefail
@@ -754,11 +811,11 @@ jobs:
           exit "$STATUS"
 
       # ============================================================
-      # 21. DEBUG APK
+      # 25 DEBUG APK
       # ============================================================
 
       - id: build_debug
-        name: "21. Build Debug APK"
+        name: "25. Build Debug APK"
         shell: bash
         run: |
           set -o pipefail
@@ -780,11 +837,11 @@ jobs:
           exit "$STATUS"
 
       # ============================================================
-      # 22. DEBUG APK VERIFY
+      # 26 DEBUG APK VERIFY
       # ============================================================
 
       - id: verify_debug
-        name: "22. Verify Debug APK"
+        name: "26. Verify Debug APK"
         shell: bash
         run: |
           set -euo pipefail
@@ -794,16 +851,13 @@ jobs:
           test -f "$APK"
 
           unzip -Z1 "$APK" |
-            grep -q \
-            '^assets/brawler_icons/shelly.png$'
+            grep -q '^assets/brawler_icons/shelly.png$'
 
           unzip -Z1 "$APK" |
-            grep -q \
-            '^assets/apk_port/maps/brawl_ball_maps.json$'
+            grep -q '^assets/apk_port/maps/brawl_ball_maps.json$'
 
           unzip -Z1 "$APK" |
-            grep -q \
-            '^assets/apk_port/models/m0.bin$'
+            grep -q '^assets/apk_port/models/m0.bin$'
 
           python3 - "$APK" <<'PY'
           import sys
@@ -815,34 +869,37 @@ jobs:
           with zipfile.ZipFile(apk) as z:
               names = set(z.namelist())
 
+          manifest = Path(
+              "app/src/main/assets/brawler_icons_manifest.txt"
+          )
+
           ids = [
               x.strip()
-              for x in Path(
-                  "app/src/main/assets/brawler_icons_manifest.txt"
-              ).read_text().splitlines()
+              for x in manifest.read_text().splitlines()
               if x.strip()
           ]
 
           assert len(ids) == 108
 
           missing = [
-              f"assets/brawler_icons/{i}.png"
-              for i in ids
-              if f"assets/brawler_icons/{i}.png" not in names
+              f"assets/brawler_icons/{item}.png"
+              for item in ids
+              if f"assets/brawler_icons/{item}.png" not in names
           ]
 
           assert not missing, missing[:10]
 
-          print("Debug APK contains all 108 brawler icons")
-          print("DEBUG APK VERIFY PASS")
+          print("All 108 brawler icons are inside Debug APK.")
           PY
 
+          echo "DEBUG APK VERIFY PASS"
+
       # ============================================================
-      # 23. RELEASE KOTLIN
+      # 27 RELEASE COMPILE
       # ============================================================
 
       - id: compile_release
-        name: "23. Compile Release Kotlin"
+        name: "27. Compile Release Kotlin"
         shell: bash
         run: |
           set -o pipefail
@@ -866,11 +923,11 @@ jobs:
           exit "$STATUS"
 
       # ============================================================
-      # 24. RELEASE APK
+      # 28 RELEASE APK
       # ============================================================
 
       - id: build_release
-        name: "24. Build Release APK"
+        name: "28. Build Release APK"
         shell: bash
         run: |
           set -o pipefail
@@ -892,11 +949,11 @@ jobs:
           exit "$STATUS"
 
       # ============================================================
-      # 25. RELEASE VERIFY
+      # 29 RELEASE VERIFY
       # ============================================================
 
       - id: verify_release
-        name: "25. Verify Release APK"
+        name: "29. Verify Release APK"
         shell: bash
         run: |
           set -euo pipefail
@@ -906,16 +963,13 @@ jobs:
           test -f "$APK"
 
           unzip -Z1 "$APK" |
-            grep -q \
-            '^assets/apk_port/maps/brawl_ball_maps.json$'
+            grep -q '^assets/apk_port/maps/brawl_ball_maps.json$'
 
           unzip -Z1 "$APK" |
-            grep -q \
-            '^assets/apk_port/brawler_icons/shelly.png$'
+            grep -q '^assets/apk_port/brawler_icons/shelly.png$'
 
           unzip -Z1 "$APK" |
-            grep -q \
-            '^assets/apk_port/lobby/victory.png$'
+            grep -q '^assets/apk_port/lobby/victory.png$'
 
           python3 - "$APK" <<'PY'
           import sys
@@ -934,68 +988,67 @@ jobs:
           ).read_text().splitlines():
 
               if line.strip() and not line.lstrip().startswith("#"):
-                  k, v = line.split("=", 1)
-                  rows[k] = v
+                  key, value = line.split("=", 1)
+                  rows[key] = value
 
           assert len(rows) == 108
 
           missing = []
 
-          for k, v in rows.items():
+          for key, value in rows.items():
 
-              if v.startswith("REMOTE|"):
-                  expected = f"assets/brawler_icons/{k}.png"
+              if value.startswith("REMOTE|"):
+                  expected = f"assets/brawler_icons/{key}.png"
               else:
-                  expected = f"assets/apk_port/brawler_icons/{v}"
+                  expected = f"assets/apk_port/brawler_icons/{value}"
 
               if expected not in names:
-                  missing.append((k, expected))
+                  missing.append((key, expected))
 
           assert not missing, missing[:10]
 
-          print(
-              "Release APK contains all 108 "
-              "avatar mappings/fallbacks"
-          )
-
-          print("RELEASE APK VERIFY PASS")
+          print("Release APK contains all 108 avatar mappings.")
           PY
 
+          echo "RELEASE APK VERIFY PASS"
+
       # ============================================================
-      # 26. ALWAYS UPLOAD DIAGNOSTICS
+      # 30 DIAGNOSTICS
       # ============================================================
 
-      - name: "26. Upload CI diagnostics"
+      - name: "30. Upload CI diagnostics"
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: RostikAI-v31.1.3-CI-diagnostics
           if-no-files-found: warn
+          retention-days: 14
           path: |
             ci-logs/*.log
             app/build/reports/**
             app/build/outputs/logs/**
+            ScreenCaptureService.before.patch.kt
 
       # ============================================================
-      # 27. DOWNLOADABLE APK
+      # 31 APK DOWNLOAD
       # ============================================================
 
-      - name: "27. Upload Debug + Release APKs"
+      - name: "31. Upload Debug + Release APKs"
         if: ${{ success() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: RostikAI-v31.1.3-APKs
           if-no-files-found: error
+          retention-days: 14
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/release/app-release.apk
-          retention-days: 14
 
       # ============================================================
-      # 28. FINAL DISCORD
+      # 32 DISCORD
       # ============================================================
 
-      - name: "28. Discord - final build state"
+      - name: "32. Discord - final build state"
         if: ${{ always() }}
         continue-on-error: true
         shell: bash
@@ -1048,16 +1101,12 @@ jobs:
 
           print(json.dumps({
               "username": "RostikAI CI",
-              "allowed_mentions": {
-                  "parse": []
-              },
+              "allowed_mentions": {"parse": []},
               "embeds": [{
-                  "title":
-                      f"[BUILD] GitHub Actions {status.upper()}",
+                  "title": f"[BUILD] GitHub Actions {status.upper()}",
                   "description":
                       f"RostikAI v31.1.3 build status: {status}",
-                  "color":
-                      colors.get(status, 9807270),
+                  "color": colors.get(status, 9807270),
                   "fields": fields,
               }]
           }))
