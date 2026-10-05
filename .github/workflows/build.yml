@@ -763,6 +763,7 @@ jobs:
       - id: compile_debug
         name: "23. Compile Debug Kotlin"
         shell: bash
+        working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           set -o pipefail
 
@@ -774,13 +775,13 @@ jobs:
             --warning-mode=all \
             :app:compileDebugKotlin \
             2>&1 |
-            tee ci-logs/compileDebugKotlin.log
+            tee "$GITHUB_WORKSPACE/ci-logs/compileDebugKotlin.log"
 
           STATUS=${PIPESTATUS[0]}
 
           echo \
             "compileDebugKotlin exit code: $STATUS" \
-            | tee -a ci-logs/compileDebugKotlin.log
+            | tee -a "$GITHUB_WORKSPACE/ci-logs/compileDebugKotlin.log"
 
           exit "$STATUS"
 
@@ -791,6 +792,7 @@ jobs:
       - id: lint_debug
         name: "24. Lint Debug"
         shell: bash
+        working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           set -o pipefail
 
@@ -800,13 +802,13 @@ jobs:
             --stacktrace \
             :app:lintDebug \
             2>&1 |
-            tee ci-logs/lintDebug.log
+            tee "$GITHUB_WORKSPACE/ci-logs/lintDebug.log"
 
           STATUS=${PIPESTATUS[0]}
 
           echo \
             "lintDebug exit code: $STATUS" \
-            | tee -a ci-logs/lintDebug.log
+            | tee -a "$GITHUB_WORKSPACE/ci-logs/lintDebug.log"
 
           exit "$STATUS"
 
@@ -817,6 +819,7 @@ jobs:
       - id: build_debug
         name: "25. Build Debug APK"
         shell: bash
+        working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           set -o pipefail
 
@@ -826,13 +829,13 @@ jobs:
             --stacktrace \
             :app:assembleDebug \
             2>&1 |
-            tee ci-logs/assembleDebug.log
+            tee "$GITHUB_WORKSPACE/ci-logs/assembleDebug.log"
 
           STATUS=${PIPESTATUS[0]}
 
           echo \
             "assembleDebug exit code: $STATUS" \
-            | tee -a ci-logs/assembleDebug.log
+            | tee -a "$GITHUB_WORKSPACE/ci-logs/assembleDebug.log"
 
           exit "$STATUS"
 
@@ -843,6 +846,7 @@ jobs:
       - id: verify_debug
         name: "26. Verify Debug APK"
         shell: bash
+        working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           set -euo pipefail
 
@@ -901,6 +905,7 @@ jobs:
       - id: compile_release
         name: "27. Compile Release Kotlin"
         shell: bash
+        working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           set -o pipefail
 
@@ -912,13 +917,13 @@ jobs:
             --warning-mode=all \
             :app:compileReleaseKotlin \
             2>&1 |
-            tee ci-logs/compileReleaseKotlin.log
+            tee "$GITHUB_WORKSPACE/ci-logs/compileReleaseKotlin.log"
 
           STATUS=${PIPESTATUS[0]}
 
           echo \
             "compileReleaseKotlin exit code: $STATUS" \
-            | tee -a ci-logs/compileReleaseKotlin.log
+            | tee -a "$GITHUB_WORKSPACE/ci-logs/compileReleaseKotlin.log"
 
           exit "$STATUS"
 
@@ -929,6 +934,7 @@ jobs:
       - id: build_release
         name: "28. Build Release APK"
         shell: bash
+        working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           set -o pipefail
 
@@ -938,13 +944,13 @@ jobs:
             --stacktrace \
             :app:assembleRelease \
             2>&1 |
-            tee ci-logs/assembleRelease.log
+            tee "$GITHUB_WORKSPACE/ci-logs/assembleRelease.log"
 
           STATUS=${PIPESTATUS[0]}
 
           echo \
             "assembleRelease exit code: $STATUS" \
-            | tee -a ci-logs/assembleRelease.log
+            | tee -a "$GITHUB_WORKSPACE/ci-logs/assembleRelease.log"
 
           exit "$STATUS"
 
@@ -955,6 +961,7 @@ jobs:
       - id: verify_release
         name: "29. Verify Release APK"
         shell: bash
+        working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           set -euo pipefail
 
@@ -1025,8 +1032,8 @@ jobs:
           retention-days: 14
           path: |
             ci-logs/*.log
-            app/build/reports/**
-            app/build/outputs/logs/**
+            ${{ env.PROJECT_ROOT }}/app/build/reports/**
+            ${{ env.PROJECT_ROOT }}/app/build/outputs/logs/**
             ScreenCaptureService.before.patch.kt
 
       # ============================================================
@@ -1041,8 +1048,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
-            app/build/outputs/apk/debug/app-debug.apk
-            app/build/outputs/apk/release/app-release.apk
+            ${{ env.PROJECT_ROOT }}/app/build/outputs/apk/debug/app-debug.apk
+            ${{ env.PROJECT_ROOT }}/app/build/outputs/apk/release/app-release.apk
 
       # ============================================================
       # 32 DISCORD
