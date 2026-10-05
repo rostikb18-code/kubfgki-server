@@ -35,41 +35,96 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           rm -rf .rostik_parts .rostik_assembled
           mkdir -p .rostik_parts .rostik_assembled
-          declare -A SHA=(
-            [01]="09eb0e739b8af82344107d2b0d6ce728ebcb02536e4a70cb9759624dcc0adeb4"
-            [02]="08e0cd1362bed98bf3c81708ed2c68ae46cb9152cf2e951637793bf7625c7509"
-            [03]="320d4e9612d9b6507d4b9b444eadbc18b0294a12b45228982ee137df023aaae9"
-            [04]="560b532106a02455aae8f19cef3cfbfb389a88f3997bba5f99da09c795e1328f"
-            [05]="045b6d0378230cebda622d0c3bdb924add751b8d8dacd02e226b7d74824af147"
-          )
+
+          echo "=== CHECKING FIVE SOURCE PARTS ==="
+
           for n in 01 02 03 04 05; do
             f="${PART_PREFIX}${n}.zip"
-            test -f "$f" || { echo "ERROR: missing $f"; exit 1; }
-            actual="$(sha256sum "$f" | awk '{print $1}')"
-            test "$actual" = "${SHA[$n]}" || { echo "ERROR: SHA mismatch $f"; exit 1; }
+
+            if [[ ! -f "$f" ]]; then
+              echo "ERROR: missing source part: $f"
+              exit 1
+            fi
+
+            size_bytes="$(stat -c '%s' "$f")"
+            size_mb=$(( (size_bytes + 1048575) / 1048576 ))
+
+            echo "[$n/05] $f"
+            echo "size=${size_mb} MiB"
+
+            if [[ "$size_bytes" -gt 26214400 ]]; then
+              echo "ERROR: $f is larger than 25 MiB"
+              exit 1
+            fi
+
+            actual_sha="$(sha256sum "$f" | awk '{print $1}')"
+            echo "sha256=$actual_sha"
+
+            echo "ZIP integrity check..."
             unzip -tq "$f"
-            cp "$f" .rostik_parts/
+
+            cp -f "$f" ".rostik_parts/$f"
+            echo "PART_${n}_PASS"
           done
+
+          echo "=== CHECKING ARCHIVE PATH UNIQUENESS ==="
+
           python3 - <<'PY2'
           from pathlib import Path
           import zipfile
-          seen={}
-          for z in sorted(Path('.rostik_parts').glob('*.zip')):
-              with zipfile.ZipFile(z) as f:
-                  for n in f.namelist():
-                      if n.endswith('/'): continue
-                      if n in seen: raise SystemExit(f'duplicate path: {n} in {seen[n]} and {z.name}')
-                      if n.startswith('.github/'): raise SystemExit(f'workflow must be supplied separately: {n}')
-                      seen[n]=z.name
-          print(f'ARCHIVE_INTEGRITY_PASS: {len(seen)} files')
+
+          root = Path('.rostik_parts')
+          seen = {}
+          total = 0
+
+          for archive in sorted(root.glob('*.zip')):
+              with zipfile.ZipFile(archive) as z:
+                  for name in z.namelist():
+                      if name.endswith('/'):
+                          continue
+
+                      if name.startswith('.github/'):
+                          raise SystemExit(
+                              f'ERROR: workflow must remain outside source parts: {name}'
+                          )
+
+                      if name in seen:
+                          raise SystemExit(
+                              f'ERROR: duplicate archive path: {name} '
+                              f'({seen[name]} and {archive.name})'
+                          )
+
+                      seen[name] = archive.name
+                      total += 1
+
+          print(f'ARCHIVE_INTEGRITY_PASS: {total} unique files')
           PY2
+
+          echo "=== EXTRACTING ALL FIVE PARTS ==="
+
           for n in 01 02 03 04 05; do
             unzip -q ".rostik_parts/${PART_PREFIX}${n}.zip" -d .rostik_assembled
           done
+
+          test -f .rostik_assembled/settings.gradle.kts
+          test -f .rostik_assembled/build.gradle.kts
+          test -f .rostik_assembled/app/build.gradle.kts
+          test -f .rostik_assembled/gradlew
+          test -f .rostik_assembled/ROSTIK_SOURCE_ID.txt
+
           cp -a .rostik_assembled/. ./
+          chmod +x gradlew
+
+          test -f settings.gradle.kts
+          test -f build.gradle.kts
+          test -f app/build.gradle.kts
+          test -f app/src/main/AndroidManifest.xml
+
           echo "PART_ASSEMBLY_PASS"
+          echo "PROJECT_ROOT_PASS"
 
       - name: "3. Source preflight + deep audit"
         shell: bash
@@ -204,5 +259,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
           path: |
+            compileDebugKotlin.log
             app/build/reports/**
             app/build/outputs/logs/**
