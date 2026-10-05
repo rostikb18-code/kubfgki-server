@@ -126,46 +126,47 @@ jobs:
           echo "PART_ASSEMBLY_PASS"
           echo "PROJECT_ROOT_PASS"
 
-      - name: "3. Repair known source duplicate"
+      - name: "3. Repair/verify ScreenCaptureService activeReader"
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PYFIX'
           from pathlib import Path
+          import re
 
           path = Path("app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt")
-          text = path.read_text(encoding="utf-8")
+          lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
 
-          duplicate = """        val activeProjection = projection ?: throw IllegalStateException("MediaProjection is unavailable")
-          val activeReader = reader ?: throw IllegalStateException("ImageReader is unavailable")
-          virtualDisplay = activeProjection.createVirtualDisplay("""
-
-          expected = 1
-          count = text.count(duplicate)
-          if count != expected:
-              raise SystemExit(
-                  f"ERROR: expected exactly one known duplicate block in {path}, found {count}"
-              )
-
-          text = text.replace(
-              "        val activeProjection = projection ?: throw IllegalStateException(\"MediaProjection is unavailable\")\n"
-              "        val activeReader = reader ?: throw IllegalStateException(\"ImageReader is unavailable\")\n"
-              "        virtualDisplay = activeProjection.createVirtualDisplay(",
-              "        val activeProjection = projection ?: throw IllegalStateException(\"MediaProjection is unavailable\")\n"
-              "        virtualDisplay = activeProjection.createVirtualDisplay(",
-              1,
+          pattern = re.compile(
+              r"^(\s*)val activeReader = reader \?: throw IllegalStateException\(\"ImageReader[^\"]*\"\)\s*$"
           )
+          matches = [i for i, line in enumerate(lines) if pattern.match(line)]
 
-          path.write_text(text, encoding="utf-8")
+          if len(matches) == 0:
+              raise SystemExit(f"ERROR: no activeReader declaration found in {path}")
 
-          remaining = text.count("val activeReader")
-          if remaining != 1:
+          if len(matches) > 2:
               raise SystemExit(
-                  f"ERROR: ScreenCaptureService activeReader count after repair = {remaining}, expected 1"
+                  f"ERROR: unexpected activeReader declaration count in {path}: {len(matches)}"
               )
 
-          print("SOURCE_REPAIR_PASS: removed only the duplicate activeReader declaration")
+          if len(matches) == 2:
+              # Kotlin reports these as conflicting locals in the same function.
+              # Keep the first declaration and remove only the second duplicate.
+              del lines[matches[1]]
+              path.write_text("".join(lines), encoding="utf-8")
+              print(f"SOURCE_REPAIR_PASS: removed duplicate activeReader at original line {matches[1] + 1}")
+          else:
+              print("SOURCE_REPAIR_PASS: activeReader already has exactly one declaration")
+
+          final_text = path.read_text(encoding="utf-8")
+          final_count = len([line for line in final_text.splitlines() if pattern.match(line)])
+          if final_count != 1:
+              raise SystemExit(
+                  f"ERROR: activeReader declaration count after repair = {final_count}, expected 1"
+              )
           PYFIX
+
       - name: "4. Source preflight + deep audit"
         shell: bash
         run: |
