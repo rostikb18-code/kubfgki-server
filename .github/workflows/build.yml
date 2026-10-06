@@ -317,4 +317,3 @@ jobs:
             release.log
             app/build/reports/**
             app/build/outputs/logs/**
-```
