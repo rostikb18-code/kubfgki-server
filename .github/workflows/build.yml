@@ -31,26 +31,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: "2. Save direct source overrides"
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf .rostik_overrides
-          mkdir -p .rostik_overrides
-
-          for f in \
-            app/src/main/java/com/rostik/touchbot/OverlayService.kt \
-            app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt; do
-            if [[ -f "$f" ]]; then
-              mkdir -p ".rostik_overrides/$(dirname "$f")"
-              cp -f "$f" ".rostik_overrides/$f"
-              echo "OVERRIDE_SAVED: $f"
-            fi
-          done
-
-          echo "DIRECT_OVERRIDE_SAVE_PASS"
-
-      - name: "3. Verify and reconstruct five source parts"
+      - name: "2. Verify and reconstruct five source parts"
         shell: bash
         run: |
           set -euo pipefail
@@ -125,7 +106,7 @@ jobs:
 
           echo "PROJECT_ASSEMBLY_PASS"
 
-      - name: "4. Verify original archived source"
+      - name: "3. Verify original archived source"
         shell: bash
         run: |
           set -euo pipefail
@@ -141,38 +122,43 @@ jobs:
 
           echo "ORIGINAL_SOURCE_VERIFY_PASS"
 
-      - name: "5. Apply direct source overrides"
+      - name: "4. Apply verified source fixes"
         shell: bash
         run: |
           set -euo pipefail
+          O="app/src/main/java/com/rostik/touchbot/OverlayService.kt"
+          S="app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt"
+          test -f "$O" && test -f "$S"
 
-          if [[ -f .rostik_overrides/app/src/main/java/com/rostik/touchbot/OverlayService.kt ]]; then
-            cp -f \
-              .rostik_overrides/app/src/main/java/com/rostik/touchbot/OverlayService.kt \
-              app/src/main/java/com/rostik/touchbot/OverlayService.kt
-            echo "OVERRIDE_APPLIED: OverlayService.kt"
-          fi
+          python3 - "$S" <<'PY'
+          from pathlib import Path
+          import re, sys
+          path=Path(sys.argv[1])
+          lines=path.read_text(encoding="utf-8").splitlines(keepends=True)
+          pattern=re.compile(r'^\s*val\s+activeReader\s*=\s*reader\s*\?:\s*throw\s+IllegalStateException\("ImageReader[^"]*"\)\s*$')
+          matches=[i for i,line in enumerate(lines) if pattern.match(line)]
+          print("activeReader declarations before:",len(matches))
+          for i in matches: print(f"  {i+1}: {lines[i].rstrip()}")
+          if len(matches)==2:
+              duplicate_line=matches[1]; del lines[duplicate_line]; path.write_text("".join(lines),encoding="utf-8")
+              print(f"Removed ONLY second activeReader declaration: original line {duplicate_line+1}")
+          elif len(matches)!=1:
+              raise SystemExit(f"ERROR: expected 1 or 2 known activeReader declarations, got {len(matches)}")
+          final=path.read_text(encoding="utf-8").splitlines()
+          final_count=sum(1 for line in final if pattern.match(line))
+          if final_count!=1: raise SystemExit(f"ERROR: activeReader declaration count after repair = {final_count}; expected exactly 1")
+          print("ACTIVE_READER_REPAIR_PASS")
+          PY
 
-          if [[ -f .rostik_overrides/app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt ]]; then
-            cp -f \
-              .rostik_overrides/app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt \
-              app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt
-            echo "OVERRIDE_APPLIED: ScreenCaptureService.kt"
-          fi
+          test -f "OverlayService_FIXED_FINAL.kt" || { echo "ERROR: OverlayService_FIXED_FINAL.kt is missing."; exit 1; }
+          cp -f "OverlayService_FIXED_FINAL.kt" "$O"
+          echo "OVERLAY_UI_OVERRIDE_APPLIED"
 
-          test -f app/src/main/java/com/rostik/touchbot/OverlayService.kt
-          test -f app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt
+          ACTIVE_READER_COUNT="$(grep -Ec '^[[:space:]]*val[[:space:]]+activeReader([[:space:]]*:|[[:space:]]*=)' "$S" || true)"
+          test "$ACTIVE_READER_COUNT" -eq 1 || { grep -n "activeReader" "$S" || true; exit 1; }
+          echo "SOURCE_FIX_PASS"
 
-          ACTIVE_READER_COUNT="$(grep -Ec '^[[:space:]]*val[[:space:]]+activeReader([[:space:]]*:|[[:space:]]*=)' app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt || true)"
-          test "$ACTIVE_READER_COUNT" -eq 1 || {
-            echo "ERROR: expected exactly one activeReader declaration, got $ACTIVE_READER_COUNT"
-            grep -n "activeReader" app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt || true
-            exit 1
-          }
-
-          echo "DIRECT_SOURCE_OVERRIDE_PASS"
-
-      - name: "6. Verify UI and runtime source"
+      - name: "5. Verify UI and runtime source"
         shell: bash
         run: |
           set -euo pipefail
@@ -190,6 +176,9 @@ jobs:
           grep -q 'currentEditorValue' "$O"
           grep -q 'selected' "$O"
           grep -q 'refreshBrawlerGrid' "$O"
+          grep -q 'searchRefreshRunnable' "$O"
+          grep -q 'take(5)' "$O"
+          grep -q 'coerceIn(0, 10000)' "$O"
           grep -q 'registerForActivityResult' app/src/main/java/com/rostik/touchbot/MainActivity.kt
 
           grep -q 'FOREGROUND_SERVICE_MEDIA_PROJECTION' app/src/main/AndroidManifest.xml
@@ -217,17 +206,17 @@ jobs:
 
           echo "SOURCE_AND_UI_VERIFY_PASS"
 
-      - name: "7. Set up Java 17"
+      - name: "6. Set up Java 17"
         uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
           cache: gradle
 
-      - name: "8. Set up Android SDK"
+      - name: "7. Set up Android SDK"
         uses: android-actions/setup-android@v4
 
-      - name: "9. Install Android SDK 35"
+      - name: "8. Install Android SDK 35"
         shell: bash
         run: |
           set -euo pipefail
@@ -237,12 +226,12 @@ jobs:
             "platforms;android-${ANDROID_PLATFORM}" \
             "build-tools;${ANDROID_BUILD_TOOLS}"
 
-      - name: "10. Set up Gradle 8.10.2"
+      - name: "9. Set up Gradle 8.10.2"
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
 
-      - name: "11. Gradle preflight"
+      - name: "10. Gradle preflight"
         shell: bash
         run: |
           set -euo pipefail
@@ -255,7 +244,7 @@ jobs:
             --console=plain
           echo "GRADLE_PREFLIGHT_PASS"
 
-      - name: "12. Compile debug Kotlin"
+      - name: "11. Compile debug Kotlin"
         shell: bash
         run: |
           set -o pipefail
@@ -275,7 +264,7 @@ jobs:
           fi
           echo "DEBUG_KOTLIN_COMPILE_PASS"
 
-      - name: "13. Lint debug"
+      - name: "12. Lint debug"
         shell: bash
         run: |
           set -euo pipefail
@@ -287,7 +276,7 @@ jobs:
             --console=plain
           echo "LINT_PASS"
 
-      - name: "14. Build debug APK"
+      - name: "13. Build debug APK"
         shell: bash
         run: |
           set -euo pipefail
@@ -300,7 +289,7 @@ jobs:
           test -s app/build/outputs/apk/debug/app-debug.apk
           echo "DEBUG_APK_BUILD_PASS"
 
-      - name: "15. Verify debug APK"
+      - name: "14. Verify debug APK"
         shell: bash
         run: |
           set -euo pipefail
@@ -326,7 +315,7 @@ jobs:
 
           echo "DEBUG_APK_VERIFY_PASS"
 
-      - name: "16. Upload debug APK"
+      - name: "15. Upload debug APK"
         if: ${{ success() }}
         uses: actions/upload-artifact@v7
         with:
@@ -334,6 +323,16 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: "16. Compile release Kotlin"
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew :app:compileReleaseKotlin \
+            --no-daemon --no-configuration-cache --stacktrace --warning-mode=all --console=plain \
+            2>&1 | tee compileReleaseKotlin.log
+          status=${PIPESTATUS[0]}
+          exit "$status"
 
       - name: "17. Build release APK"
         shell: bash
