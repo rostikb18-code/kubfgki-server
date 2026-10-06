@@ -59,6 +59,7 @@ class OverlayService : Service() {
     private var brawlerGridHost: LinearLayout? = null
     private var brawlerCountView: TextView? = null
     private var brawlerGridScroll: ScrollView? = null
+    private var searchRefreshRunnable: Runnable? = null
 
     private val selected = linkedSetOf<String>()
     private val draft = linkedMapOf<String, Pair<Int, Int>>()
@@ -96,6 +97,8 @@ class OverlayService : Service() {
     override fun onDestroy() {
         try { bubble?.let(wm::removeView) } catch (_: Throwable) {}
         try { panel?.let(wm::removeView) } catch (_: Throwable) {}
+        searchRefreshRunnable?.let(mainHandler::removeCallbacks)
+        searchRefreshRunnable = null
         avatarExecutor.shutdownNow()
         synchronized(avatarCache) { avatarCache.evictAll() }
         bubble = null
@@ -348,9 +351,26 @@ class OverlayService : Service() {
         search.addTextChangedListener(simpleWatcher {
             brawlerSearch = it
             brawlerScrollY = 0
-            // IMPORTANT: never rebuild the whole overlay from a TextWatcher.
-            // Rebuilding destroys the EditText and its focus after the first key.
-            refreshBrawlerGrid()
+
+            // IMPORTANT: only redraw the brawler grid, never the whole overlay.
+            // Debounce the redraw so Android IME composition and multi-character
+            // input cannot lose focus after the first character.
+            searchRefreshRunnable?.let(mainHandler::removeCallbacks)
+            val query = it
+            val redraw = Runnable {
+                if (!expanded) return@Runnable
+                if (search.text?.toString() != query) return@Runnable
+                val hadFocus = search.hasFocus()
+                val selection = search.selectionStart.coerceAtLeast(0)
+                refreshBrawlerGrid()
+                if (hadFocus) {
+                    search.requestFocus()
+                    val pos = selection.coerceIn(0, search.length())
+                    try { search.setSelection(pos) } catch (_: Throwable) {}
+                }
+            }
+            searchRefreshRunnable = redraw
+            mainHandler.postDelayed(redraw, 90L)
         })
         return box
     }
@@ -717,9 +737,10 @@ class OverlayService : Service() {
                     val digits = raw.filter(Char::isDigit).take(5)
                     val parsed = digits.toIntOrNull()?.coerceIn(0, 10000) ?: 0
                     if (raw != digits) {
+                        val oldSelection = editor.selectionStart.coerceAtLeast(0)
                         suppressEditorWatcher = true
                         editor.setText(digits)
-                        editor.setSelection(digits.length)
+                        editor.setSelection(oldSelection.coerceIn(0, digits.length))
                         suppressEditorWatcher = false
                     }
                     updateDraftValue(id, field, parsed, persist = true)
