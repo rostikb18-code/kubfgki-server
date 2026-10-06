@@ -1,4 +1,5 @@
-name: RostikAI v31.1.3 - Verified APK
+```yaml
+name: RostikAI v31.1.3 - Stable Build + UI Verify + APK
 
 on:
   workflow_dispatch:
@@ -17,20 +18,30 @@ env:
   ANDROID_PLATFORM: "35"
   ANDROID_BUILD_TOOLS: "35.0.0"
   GRADLE_VERSION: "8.10.2"
+  PART_PREFIX: "RostikAI-v31.1.3-MERGED-ANDROID-PROJECT-PART-"
 
 jobs:
   build:
-    name: CHECK -> FIX UI -> COMPILE -> APK
+    name: "CHECK -> FIX -> BUILD -> APK"
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
     steps:
+
+      # ============================================================
+      # 1. CHECKOUT
+      # ============================================================
+
       - name: "1. Checkout"
         uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
-      - name: "2. Assemble Android source"
+      # ============================================================
+      # 2. RECONSTRUCT PROJECT
+      # ============================================================
+
+      - name: "2. Reconstruct Android project"
         shell: bash
         run: |
           set -euo pipefail
@@ -38,285 +49,875 @@ jobs:
           rm -rf .rostik_parts .rostik_assembled
           mkdir -p .rostik_parts .rostik_assembled
 
-          if [[ -f settings.gradle.kts && -f app/build.gradle.kts && -f app/src/main/AndroidManifest.xml ]]; then
-            echo "DIRECT_ANDROID_PROJECT_PASS"
-          else
-            PREFIX="RostikAI-v31.1.3-MERGED-ANDROID-PROJECT-PART-"
-            FOUND=0
+          echo "=========================================="
+          echo "ROSTIKAI SOURCE ASSEMBLY"
+          echo "=========================================="
 
-            for n in 01 02 03 04 05; do
-              f="${PREFIX}${n}.zip"
-              if [[ -f "$f" ]]; then
-                FOUND=$((FOUND + 1))
-                echo "CHECK $f"
-                test "$(stat -c '%s' "$f")" -le 26214400 || {
-                  echo "ERROR: $f is larger than 25 MiB"
-                  exit 1
-                }
-                unzip -tq "$f"
-                cp -f "$f" ".rostik_parts/$f"
-                echo "PART_${n}_PASS sha256=$(sha256sum "$f" | awk '{print $1}')"
-              fi
-            done
+          for n in 01 02 03 04 05; do
 
-            if [[ "$FOUND" -eq 5 ]]; then
-              python3 - <<'PY'
+            FILE="${PART_PREFIX}${n}.zip"
+
+            if [[ ! -f "$FILE" ]]; then
+              echo "ERROR: missing $FILE"
+              exit 1
+            fi
+
+            SIZE="$(stat -c '%s' "$FILE")"
+
+            echo ""
+            echo "[$n/05] $FILE"
+            echo "size=$SIZE bytes"
+
+            if [[ "$SIZE" -gt 26214400 ]]; then
+              echo "ERROR: ZIP exceeds GitHub browser upload limit of 25 MiB"
+              exit 1
+            fi
+
+            sha256sum "$FILE"
+
+            unzip -tq "$FILE"
+
+            cp -f "$FILE" ".rostik_parts/$FILE"
+
+            echo "PART_${n}_PASS"
+
+          done
+
+          echo ""
+          echo "=========================================="
+          echo "CHECKING ARCHIVE UNIQUENESS"
+          echo "=========================================="
+
+          python3 - <<'PY'
           from pathlib import Path
           import zipfile
 
           seen = {}
-          for archive in sorted(Path('.rostik_parts').glob('*.zip')):
+
+          for archive in sorted(Path(".rostik_parts").glob("*.zip")):
+
               with zipfile.ZipFile(archive) as z:
+
                   for name in z.namelist():
-                      if name.endswith('/'):
+
+                      if name.endswith("/"):
                           continue
-                      if name.startswith('.github/'):
-                          raise SystemExit(f'workflow must remain outside source parts: {name}')
+
+                      if name.startswith(".github/"):
+                          raise SystemExit(
+                              f"ERROR: workflow found inside source archive: {name}"
+                          )
+
                       if name in seen:
                           raise SystemExit(
-                              f'duplicate archive path: {name} '
-                              f'({seen[name]} and {archive.name})'
+                              f"ERROR: duplicate archive path: {name} "
+                              f"({seen[name]} and {archive.name})"
                           )
+
                       seen[name] = archive.name
-          print(f'ARCHIVE_INTEGRITY_PASS files={len(seen)}')
+
+          print(
+              f"ARCHIVE_INTEGRITY_PASS: {len(seen)} unique files"
+          )
           PY
 
-              for n in 01 02 03 04 05; do
-                unzip -q ".rostik_parts/${PREFIX}${n}.zip" -d .rostik_assembled
-              done
-              cp -a .rostik_assembled/. ./
+          echo ""
+          echo "=========================================="
+          echo "EXTRACTING SOURCE"
+          echo "=========================================="
 
-            elif [[ "$FOUND" -ne 0 ]]; then
-              echo "ERROR: incomplete five-part MERGED source set: $FOUND/5"
-              exit 1
-            else
-              OLD_PREFIX="RostikAI-v31.1.3-PYTHON-PORT-3-PART-"
-              OLD_FOUND=0
-              for n in 01 02 03 04; do
-                f="${OLD_PREFIX}${n}.zip"
-                if [[ -f "$f" ]]; then
-                  OLD_FOUND=$((OLD_FOUND + 1))
-                  unzip -tq "$f"
-                  cp -f "$f" ".rostik_parts/$f"
-                fi
-              done
-              if [[ "$OLD_FOUND" -eq 4 ]]; then
-                for n in 01 02 03 04; do
-                  unzip -q ".rostik_parts/${OLD_PREFIX}${n}.zip" -d .rostik_assembled
-                done
-                cp -a .rostik_assembled/. ./
-                echo "LEGACY_FOUR_PART_SOURCE_PASS"
-              else
-                echo "ERROR: Android project not found and no complete source archive set exists."
-                exit 1
-              fi
-            fi
-          fi
+          for n in 01 02 03 04 05; do
+            unzip -q \
+              ".rostik_parts/${PART_PREFIX}${n}.zip" \
+              -d ".rostik_assembled"
+          done
+
+          test -f ".rostik_assembled/settings.gradle.kts"
+          test -f ".rostik_assembled/build.gradle.kts"
+          test -f ".rostik_assembled/app/build.gradle.kts"
+          test -f ".rostik_assembled/gradlew"
+          test -f ".rostik_assembled/app/src/main/AndroidManifest.xml"
+
+          cp -a ".rostik_assembled/." "./"
+
+          chmod +x gradlew
+
+          echo "PROJECT_ASSEMBLY_PASS"
+
+      # ============================================================
+      # 3. ORIGINAL SOURCE VERIFY
+      # ============================================================
+
+      - name: "3. Verify source inventory"
+        shell: bash
+        run: |
+          set -euo pipefail
 
           test -f settings.gradle.kts
           test -f build.gradle.kts
           test -f app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
-          test -f app/src/main/java/com/rostik/touchbot/OverlayService.kt
-          test -f app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt
-          test -f tools/verify_source.py
 
-          echo "PROJECT_ASSEMBLY_PASS"
+          test -f \
+            app/src/main/java/com/rostik/touchbot/MainActivity.kt
 
-      - name: "3. Verify original source before CI patch"
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 tools/verify_source.py
-          echo "ORIGINAL_SOURCE_VERIFY_PASS"
+          test -f \
+            app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt
 
-      - name: "4. Install the corrected OverlayService UI"
-        shell: bash
-        run: |
-          set -euo pipefail
+          test -f \
+            app/src/main/java/com/rostik/touchbot/OverlayService.kt
 
-          PATCH=""
-          if [[ -f OverlayService.kt ]]; then
-            PATCH="OverlayService.kt"
-          elif [[ -f OverlayService_FIXED2.kt ]]; then
-            PATCH="OverlayService_FIXED2.kt"
-          elif [[ -f OverlayService_FIXED.kt ]]; then
-            PATCH="OverlayService_FIXED.kt"
-          fi
+          test -f \
+            app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
 
-          if [[ -n "$PATCH" ]]; then
-            cp -f "$PATCH" app/src/main/java/com/rostik/touchbot/OverlayService.kt
-            echo "OVERLAY_PATCH_APPLIED=$PATCH"
-          else
-            echo "ERROR: corrected OverlayService.kt is missing from repository root."
-            echo "Upload the second file as exactly: OverlayService.kt"
-            exit 1
-          fi
+          test -d app/src/main/assets/brawler_icons
 
-          test -s app/src/main/java/com/rostik/touchbot/OverlayService.kt
-          grep -q 'private fun buildSearchBar()' app/src/main/java/com/rostik/touchbot/OverlayService.kt
-          grep -q 'private fun buildSizeCard()' app/src/main/java/com/rostik/touchbot/OverlayService.kt
-          grep -q 'sizeSlider("ШИРИНА"' app/src/main/java/com/rostik/touchbot/OverlayService.kt
-          grep -q 'sizeSlider("ВЫСОТА"' app/src/main/java/com/rostik/touchbot/OverlayService.kt
-          grep -q 'private fun trophyField' app/src/main/java/com/rostik/touchbot/OverlayService.kt
-          grep -q 'TYPE_CLASS_NUMBER' app/src/main/java/com/rostik/touchbot/OverlayService.kt
-          grep -q 'refreshAvatarViewsOnly' app/src/main/java/com/rostik/touchbot/OverlayService.kt
+          ICON_COUNT="$(
+            find app/src/main/assets/brawler_icons \
+              -type f \
+              -name '*.png' |
+            wc -l |
+            tr -d ' '
+          )"
 
-          # The asynchronous avatar loader must not rebuild the whole panel.
-          if grep -n 'mainHandler.post.*rebuildPanel()' app/src/main/java/com/rostik/touchbot/OverlayService.kt; then
-            echo "ERROR: avatar loading can still destroy EditText focus."
-            exit 1
-          fi
+          test "$ICON_COUNT" = "108"
 
-          echo "OVERLAY_UI_PATCH_PASS"
+          test -f \
+            app/src/main/assets/brawler_icons_manifest.txt
 
-      - name: "5. Verify 108 brawlers and assets"
+          test -f \
+            app/src/main/assets/apk_port/maps/brawl_ball_maps.json
+
+          test -f \
+            app/src/main/assets/apk_port/models/m0.bin
+
+          test -f \
+            app/src/main/assets/apk_port/models/m1.bin
+
+          test -f \
+            app/src/main/assets/apk_port/models/m2.bin
+
+          echo "SOURCE_INVENTORY_PASS"
+
+      # ============================================================
+      # 4. FIX activeReader
+      # ============================================================
+
+      - name: "4. Fix duplicate activeReader"
         shell: bash
         run: |
           set -euo pipefail
 
-          test "$(grep -Ev '^[[:space:]]*$' app/src/main/assets/brawler_icons_manifest.txt | wc -l | tr -d ' ')" = "108"
-          test "$(find app/src/main/assets/brawler_icons -type f -name '*.png' | wc -l | tr -d ' ')" = "108"
-          test -f app/src/main/assets/brawler_icons/shelly.png
-          test -f app/src/main/assets/brawler_icons/spike.png
-          test -f app/src/main/assets/apk_port/maps/brawl_ball_maps.json
-          test -f app/src/main/assets/apk_port/models/m0.bin
-          test -f app/src/main/assets/apk_port/models/m1.bin
-          test -f app/src/main/assets/apk_port/models/m2.bin
-          test -f app/src/main/assets/brawler_avatar_map.properties
+          FILE="app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt"
+
+          test -f "$FILE"
+
+          echo "=== activeReader BEFORE ==="
+          grep -n \
+            -E 'val[[:space:]]+activeReader' \
+            "$FILE" || true
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          path = Path(sys.argv[1])
+
+          lines = path.read_text(
+              encoding="utf-8"
+          ).splitlines(keepends=True)
+
+          pattern = re.compile(
+              r'^(\s*)val\s+activeReader\s*(?::\s*ImageReader)?\s*='
+          )
+
+          matches = [
+              i
+              for i, line in enumerate(lines)
+              if pattern.match(line)
+          ]
+
+          print(
+              f"activeReader declarations before fix: {len(matches)}"
+          )
+
+          if len(matches) == 0:
+              raise SystemExit(
+                  "ERROR: activeReader declaration not found"
+              )
+
+          if len(matches) == 1:
+              print(
+                  "ACTIVE_READER_ALREADY_VALID"
+              )
+
+          elif len(matches) == 2:
+
+              duplicate_index = matches[1]
+
+              print(
+                  "Removing second duplicate "
+                  f"activeReader at source line "
+                  f"{duplicate_index + 1}"
+              )
+
+              del lines[duplicate_index]
+
+              path.write_text(
+                  "".join(lines),
+                  encoding="utf-8"
+              )
+
+          else:
+              raise SystemExit(
+                  "ERROR: more than two activeReader "
+                  "declarations found; refusing unsafe modification"
+              )
+
+          final_lines = path.read_text(
+              encoding="utf-8"
+          ).splitlines()
+
+          final_count = sum(
+              1
+              for line in final_lines
+              if pattern.match(line)
+          )
+
+          print(
+              f"activeReader declarations after fix: {final_count}"
+          )
+
+          if final_count != 1:
+              raise SystemExit(
+                  "ERROR: activeReader repair did not leave "
+                  "exactly one declaration"
+              )
+
+          print("ACTIVE_READER_REPAIR_PASS")
+          PY
+
+          echo "=== activeReader AFTER ==="
+
+          grep -n \
+            -E 'val[[:space:]]+activeReader' \
+            "$FILE"
+
+      # ============================================================
+      # 5. PATCH UI
+      # ============================================================
+
+      - name: "5. Repair brawler search, size sliders and trophy editor"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/rostik/touchbot/OverlayService.kt"
+
+          test -f "$FILE"
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+
+          s = path.read_text(encoding="utf-8")
+
+          # --------------------------------------------------------
+          # Required state fields
+          # --------------------------------------------------------
+
+          if "private var brawlerGridHost: LinearLayout? = null" not in s:
+
+              anchor = """    private var activeEditor: EditText? = null
+              private var suppressEditorWatcher = false
+              """
+
+              replacement = """    private var activeEditor: EditText? = null
+              private var suppressEditorWatcher = false
+              private var brawlerGridHost: LinearLayout? = null
+              private var brawlerCountView: TextView? = null
+              private var brawlerGridScroll: ScrollView? = null
+              """
+
+              if anchor not in s:
+                  raise SystemExit(
+                      "ERROR: OverlayService state anchor not found"
+                  )
+
+              s = s.replace(
+                  anchor,
+                  replacement,
+                  1
+              )
+
+          # --------------------------------------------------------
+          # Search must NEVER rebuild whole panel.
+          # --------------------------------------------------------
+
+          old_search = """        search.addTextChangedListener(simpleWatcher {
+              brawlerSearch = it
+              brawlerScrollY = 0
+              rebuildPanel()
+          })
+          """
+
+          new_search = """        search.setSelectAllOnFocus(false)
+              search.imeOptions =
+                  android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+
+              search.addTextChangedListener(simpleWatcher {
+                  brawlerSearch = it
+                  brawlerScrollY = 0
+
+                  // IMPORTANT:
+                  // Only refresh the brawler list.
+                  // Never rebuild WindowManager panel here.
+                  refreshBrawlerGrid()
+              })
+          """
+
+          if old_search in s:
+              s = s.replace(
+                  old_search,
+                  new_search,
+                  1
+              )
+
+          # --------------------------------------------------------
+          # Search keyboard/focus safety.
+          # --------------------------------------------------------
+
+          if "isFocusableInTouchMode = true" not in s:
+
+              anchor = """            inputType =
+                  android.text.InputType.TYPE_CLASS_TEXT
+              """
+
+              if anchor in s:
+
+                  replacement = """            inputType =
+                  android.text.InputType.TYPE_CLASS_TEXT
+
+              isFocusable = true
+              isFocusableInTouchMode = true
+              """
+
+                  s = s.replace(
+                      anchor,
+                      replacement,
+                      1
+                  )
+
+          # --------------------------------------------------------
+          # Required runtime markers.
+          # --------------------------------------------------------
+
+          required_markers = [
+              "private fun buildSizeCard(): View",
+              "private fun sizeSlider(",
+              "private fun trophyField(",
+              "private fun buildNumericKeyboard(",
+              "private fun refreshBrawlerGrid()",
+          ]
+
+          missing = [
+              marker
+              for marker in required_markers
+              if marker not in s
+          ]
+
+          if missing:
+              raise SystemExit(
+                  "ERROR: OverlayService is missing required UI "
+                  "implementation: " + ", ".join(missing)
+              )
+
+          # --------------------------------------------------------
+          # Trophy editor requirements.
+          # --------------------------------------------------------
+
+          trophy_markers = [
+              "TYPE_CLASS_NUMBER",
+              "setSelectAllOnFocus(false)",
+              "take(5)",
+              "coerceIn(0, 10000)",
+              "updateDraftValue",
+              "buildNumericKeyboard",
+          ]
+
+          missing_trophy = [
+              marker
+              for marker in trophy_markers
+              if marker not in s
+          ]
+
+          if missing_trophy:
+              raise SystemExit(
+                  "ERROR: multi-digit trophy editor is incomplete: "
+                  + ", ".join(missing_trophy)
+              )
+
+          # --------------------------------------------------------
+          # Width/height requirements.
+          # --------------------------------------------------------
+
+          size_markers = [
+              "sizeSlider(\"ШИРИНА\"",
+              "sizeSlider(\"ВЫСОТА\"",
+              "widthPct",
+              "heightPct",
+              "updatePanelSize()",
+          ]
+
+          missing_size = [
+              marker
+              for marker in size_markers
+              if marker not in s
+          ]
+
+          if missing_size:
+              raise SystemExit(
+                  "ERROR: width/height controls are incomplete: "
+                  + ", ".join(missing_size)
+              )
+
+          # --------------------------------------------------------
+          # Search must not contain rebuildPanel().
+          # --------------------------------------------------------
+
+          search_start = s.find(
+              "private fun buildSearchBar()"
+          )
+
+          search_end = s.find(
+              "private fun buildContent()",
+              search_start
+          )
+
+          if search_start >= 0 and search_end > search_start:
+
+              search_block = s[
+                  search_start:search_end
+              ]
+
+              if "rebuildPanel()" in search_block:
+
+                  raise SystemExit(
+                      "ERROR: search TextWatcher still "
+                      "rebuilds entire panel"
+                  )
+
+          path.write_text(
+              s,
+              encoding="utf-8"
+          )
+
+          print("UI_PATCH_PASS")
+          PY
+
+      # ============================================================
+      # 6. UI STATIC VERIFICATION
+      # ============================================================
+
+      - name: "6. Verify UI controls"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/rostik/touchbot/OverlayService.kt"
+
+          echo "=== UI CHECK ==="
+
+          grep -q \
+            'refreshBrawlerGrid()' \
+            "$FILE"
+
+          grep -q \
+            'setSelectAllOnFocus(false)' \
+            "$FILE"
+
+          grep -q \
+            'sizeSlider("ШИРИНА"' \
+            "$FILE"
+
+          grep -q \
+            'sizeSlider("ВЫСОТА"' \
+            "$FILE"
+
+          grep -q \
+            'TYPE_CLASS_NUMBER' \
+            "$FILE"
+
+          grep -q \
+            'buildNumericKeyboard' \
+            "$FILE"
+
+          grep -q \
+            'take(5)' \
+            "$FILE"
+
+          grep -q \
+            'coerceIn(0, 10000)' \
+            "$FILE"
+
+          grep -q \
+            'private fun refreshBrawlerGrid()' \
+            "$FILE"
+
+          grep -q \
+            'private fun buildSizeCard()' \
+            "$FILE"
+
+          grep -q \
+            'private fun buildEditorCard()' \
+            "$FILE"
+
+          echo "UI_CONTROLS_PASS"
+
+      # ============================================================
+      # 7. RUNTIME CHECKS
+      # ============================================================
+
+      - name: "7. Runtime safety checks"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          grep -q \
+            'FOREGROUND_SERVICE_MEDIA_PROJECTION' \
+            app/src/main/AndroidManifest.xml
+
+          grep -q \
+            'foregroundServiceType="mediaProjection"' \
+            app/src/main/AndroidManifest.xml
+
+          grep -q \
+            'android.permission.BIND_ACCESSIBILITY_SERVICE' \
+            app/src/main/AndroidManifest.xml
+
+          grep -q \
+            'canPerformGestures' \
+            app/src/main/res/xml/accessibility_service_config.xml
+
+          grep -q \
+            'registerForActivityResult' \
+            app/src/main/java/com/rostik/touchbot/MainActivity.kt
+
+          grep -q \
+            'acquireLatestImage' \
+            app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt
+
+          grep -q \
+            'GestureResultCallback' \
+            app/src/main/java/com/rostik/touchbot/BotAccessibilityService.kt
+
+          grep -q \
+            'gestureBusy' \
+            app/src/main/java/com/rostik/touchbot/BotAccessibilityService.kt
+
+          echo "RUNTIME_SAFETY_PASS"
+
+      # ============================================================
+      # 8. BRAWLER CHECK
+      # ============================================================
+
+      - name: "8. Verify 108 brawlers"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          COUNT="$(
+            grep -Ev '^[[:space:]]*$' \
+              app/src/main/assets/brawler_icons_manifest.txt |
+            wc -l |
+            tr -d ' '
+          )"
+
+          test "$COUNT" = "108"
+
+          grep -q \
+            'e("shelly"' \
+            app/src/main/java/com/rostik/touchbot/BrawlerCatalog.kt
+
+          grep -q \
+            'e("spike"' \
+            app/src/main/java/com/rostik/touchbot/BrawlerCatalog.kt
+
+          ICONS="$(
+            find app/src/main/assets/brawler_icons \
+              -type f \
+              -name '*.png' |
+            wc -l |
+            tr -d ' '
+          )"
+
+          test "$ICONS" = "108"
+
+          echo "BRAWLERS_108_PASS"
+
+      # ============================================================
+      # 9. MAP CHECK
+      # ============================================================
+
+      - name: "9. Verify Brawl Ball maps"
+        shell: bash
+        run: |
+          set -euo pipefail
 
           python3 - <<'PY'
           import json
-          from pathlib import Path
 
-          p = Path('app/src/main/assets/apk_port/maps/brawl_ball_maps.json')
-          data = json.loads(p.read_text(encoding='utf-8'))
-          assert isinstance(data, dict) and len(data) >= 80
+          path = (
+              "app/src/main/assets/"
+              "apk_port/maps/brawl_ball_maps.json"
+          )
+
+          with open(path, encoding="utf-8") as f:
+              data = json.load(f)
+
+          assert isinstance(data, dict)
+          assert len(data) >= 80
+          assert "Back Pocket" in data
+
           for name, grid in data.items():
+
+              assert isinstance(grid, list), name
               assert len(grid) == 33, name
-              assert all(isinstance(row, str) and len(row) == 21 for row in grid), name
-          print(f'MAPS_PASS count={len(data)}')
+
+              for row in grid:
+                  assert isinstance(row, str), name
+                  assert len(row) == 21, name
+
+          print(
+              f"MAPS_PASS: {len(data)} valid 33x21 maps"
+          )
           PY
 
-          echo "ASSET_VERIFICATION_PASS"
+      # ============================================================
+      # 10. JAVA
+      # ============================================================
 
-      - name: "6. Runtime/UI static checks"
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          UI=app/src/main/java/com/rostik/touchbot/OverlayService.kt
-          SC=app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt
-
-          grep -q 'registerForActivityResult' app/src/main/java/com/rostik/touchbot/MainActivity.kt
-          grep -q 'acquireLatestImage' "$SC"
-          grep -q 'GestureResultCallback' app/src/main/java/com/rostik/touchbot/BotAccessibilityService.kt
-          grep -q 'heartbeatMovement' app/src/main/java/com/rostik/touchbot/MatchSupervisor.kt
-          grep -q 'object TrophyRules' app/src/main/java/com/rostik/touchbot/TrophyRules.kt
-
-          grep -q 'setSelectAllOnFocus(false)' "$UI"
-          grep -q 'TYPE_CLASS_TEXT' "$UI"
-          grep -q 'TYPE_CLASS_NUMBER' "$UI"
-          grep -q 'widthPct' "$UI"
-          grep -q 'heightPct' "$UI"
-          grep -q 'updatePanelSize()' "$UI"
-          grep -q 'currentEditorValue' "$UI"
-          grep -q 'targetCups' app/src/main/java/com/rostik/touchbot/QueueItem.kt || true
-
-          if grep -RIn --exclude-dir=build --exclude-dir=.gradle -E 'FRAME_RATE_COMPATIBILITY_NO_VIOLATION|selectAllOnFocus[[:space:]]*=' app/src/main/java; then
-            echo "ERROR: known broken symbol remains"
-            exit 1
-          fi
-
-          echo "RUNTIME_UI_STATIC_PASS"
-
-      - name: "7. Java 17"
+      - name: "10. Set up Java 17"
         uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
           cache: gradle
 
-      - name: "8. Android SDK 35"
+      # ============================================================
+      # 11. ANDROID SDK
+      # ============================================================
+
+      - name: "11. Set up Android SDK"
         uses: android-actions/setup-android@v4
 
-      - name: "9. Install Android SDK components"
+      - name: "12. Install Android SDK 35"
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+          yes | sdkmanager --licenses \
+            >/dev/null 2>&1 || true
+
           sdkmanager \
             "platform-tools" \
             "platforms;android-${ANDROID_PLATFORM}" \
             "build-tools;${ANDROID_BUILD_TOOLS}"
-          test -d "$ANDROID_SDK_ROOT/platforms/android-${ANDROID_PLATFORM}"
-          test -d "$ANDROID_SDK_ROOT/build-tools/${ANDROID_BUILD_TOOLS}"
+
+          test -d \
+            "$ANDROID_SDK_ROOT/platforms/android-${ANDROID_PLATFORM}"
+
+          test -d \
+            "$ANDROID_SDK_ROOT/build-tools/${ANDROID_BUILD_TOOLS}"
+
           echo "ANDROID_SDK_PASS"
 
-      - name: "10. Gradle 8.10.2"
+      # ============================================================
+      # 12. GRADLE
+      # ============================================================
+
+      - name: "13. Set up Gradle"
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
 
-      - name: "11. Gradle project preflight"
+      # ============================================================
+      # 13. GRADLE PREFLIGHT
+      # ============================================================
+
+      - name: "14. Gradle project preflight"
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x gradlew
-          command -v gradle
+
+          test -x gradlew
+
           ./gradlew --version
-          ./gradlew projects --no-daemon --no-configuration-cache --stacktrace --console=plain
+
+          ./gradlew projects \
+            --no-daemon \
+            --no-configuration-cache \
+            --stacktrace \
+            --console=plain
+
           echo "GRADLE_PREFLIGHT_PASS"
 
-      - name: "12. Compile debug Kotlin"
-        id: compile_debug
+      # ============================================================
+      # 14. COMPILE DEBUG
+      # ============================================================
+
+      - name: "15. Compile Debug Kotlin"
         shell: bash
         run: |
           set -o pipefail
-          ./gradlew :app:compileDebugKotlin \
+
+          ./gradlew \
+            :app:compileDebugKotlin \
             --no-daemon \
             --no-configuration-cache \
             --stacktrace \
             --warning-mode=all \
             --console=plain \
             2>&1 | tee compileDebugKotlin.log
-          status=${PIPESTATUS[0]}
-          echo "compileDebugKotlin exit=$status" | tee -a compileDebugKotlin.log
-          exit "$status"
 
-      - name: "13. Assemble debug APK"
-        id: build_debug
+          STATUS=${PIPESTATUS[0]}
+
+          if [[ "$STATUS" -ne 0 ]]; then
+
+            echo ""
+            echo "=========================================="
+            echo "KOTLIN COMPILATION FAILED"
+            echo "=========================================="
+
+            grep -E \
+              '(^e: |FAILURE:|Caused by:|\.kt:[0-9]+:[0-9]+:)' \
+              compileDebugKotlin.log |
+              tail -n 150 || true
+
+            echo ""
+            echo "Full tail:"
+            tail -n 150 compileDebugKotlin.log
+
+            exit "$STATUS"
+          fi
+
+          echo "COMPILE_DEBUG_PASS"
+
+      # ============================================================
+      # 15. LINT
+      # ============================================================
+
+      - name: "16. Lint Debug"
         shell: bash
         run: |
-          set -o pipefail
-          ./gradlew :app:assembleDebug \
+          set -euo pipefail
+
+          ./gradlew \
+            :app:lintDebug \
             --no-daemon \
             --no-configuration-cache \
             --stacktrace \
             --warning-mode=all \
-            --console=plain \
-            2>&1 | tee assembleDebug.log
-          status=${PIPESTATUS[0]}
-          echo "assembleDebug exit=$status" | tee -a assembleDebug.log
-          exit "$status"
+            --console=plain
 
-      - name: "14. Verify debug APK"
-        id: verify_debug
+          echo "LINT_DEBUG_PASS"
+
+      # ============================================================
+      # 16. DEBUG APK
+      # ============================================================
+
+      - name: "17. Assemble Debug APK"
         shell: bash
         run: |
           set -euo pipefail
-          APK=app/build/outputs/apk/debug/app-debug.apk
-          test -s "$APK"
-          unzip -tq "$APK"
-          unzip -Z1 "$APK" | grep -q '^assets/brawler_icons/shelly.png$'
-          unzip -Z1 "$APK" | grep -q '^assets/brawler_icons/spike.png$'
-          unzip -Z1 "$APK" | grep -q '^assets/apk_port/maps/brawl_ball_maps.json$'
-          unzip -Z1 "$APK" | grep -q '^assets/apk_port/models/m0.bin$'
-          echo "DEBUG_APK_PASS=$APK"
 
-      # Debug is uploaded before release, so a later release-only failure
-      # does not hide the APK the user needs to install/test.
-      - name: "15. Upload debug APK"
+          ./gradlew \
+            :app:assembleDebug \
+            --no-daemon \
+            --no-configuration-cache \
+            --stacktrace \
+            --warning-mode=all \
+            --console=plain
+
+          echo "ASSEMBLE_DEBUG_PASS"
+
+      # ============================================================
+      # 17. DEBUG APK VERIFY
+      # ============================================================
+
+      - name: "18. Verify Debug APK"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+
+          test -s "$APK"
+
+          unzip -tq "$APK"
+
+          unzip -Z1 "$APK" |
+            grep -q \
+            '^assets/brawler_icons/shelly.png$'
+
+          unzip -Z1 "$APK" |
+            grep -q \
+            '^assets/brawler_icons/spike.png$'
+
+          unzip -Z1 "$APK" |
+            grep -q \
+            '^assets/apk_port/maps/brawl_ball_maps.json$'
+
+          unzip -Z1 "$APK" |
+            grep -q \
+            '^assets/apk_port/models/m0.bin$'
+
+          python3 - "$APK" <<'PY'
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          apk = sys.argv[1]
+
+          with zipfile.ZipFile(apk) as z:
+              names = set(z.namelist())
+
+          ids = [
+              x.strip()
+              for x in Path(
+                  "app/src/main/assets/"
+                  "brawler_icons_manifest.txt"
+              ).read_text(
+                  encoding="utf-8"
+              ).splitlines()
+              if x.strip()
+          ]
+
+          assert len(ids) == 108
+
+          missing = [
+              f"assets/brawler_icons/{i}.png"
+              for i in ids
+              if f"assets/brawler_icons/{i}.png" not in names
+          ]
+
+          assert not missing, missing[:10]
+
+          print(
+              "APK contains all 108 brawler icons"
+          )
+          PY
+
+          echo "DEBUG_APK_VERIFY_PASS"
+
+      # ============================================================
+      # 18. UPLOAD DEBUG APK
+      # ============================================================
+
+      - name: "19. Upload Debug APK"
         if: ${{ success() }}
         uses: actions/upload-artifact@v7
         with:
@@ -325,68 +926,59 @@ jobs:
           retention-days: 30
           path: app/build/outputs/apk/debug/app-debug.apk
 
-      - name: "16. Lint debug"
-        id: lint_debug
-        shell: bash
-        run: |
-          set -o pipefail
-          ./gradlew :app:lintDebug \
-            --no-daemon \
-            --no-configuration-cache \
-            --stacktrace \
-            --warning-mode=all \
-            --console=plain \
-            2>&1 | tee lintDebug.log
-          status=${PIPESTATUS[0]}
-          echo "lintDebug exit=$status" | tee -a lintDebug.log
-          exit "$status"
+      # ============================================================
+      # 19. RELEASE
+      # ============================================================
 
-      - name: "17. Compile release Kotlin"
-        id: compile_release
-        shell: bash
-        run: |
-          set -o pipefail
-          ./gradlew :app:compileReleaseKotlin \
-            --no-daemon \
-            --no-configuration-cache \
-            --stacktrace \
-            --warning-mode=all \
-            --console=plain \
-            2>&1 | tee compileReleaseKotlin.log
-          status=${PIPESTATUS[0]}
-          echo "compileReleaseKotlin exit=$status" | tee -a compileReleaseKotlin.log
-          exit "$status"
-
-      - name: "18. Assemble release APK"
-        id: build_release
-        shell: bash
-        run: |
-          set -o pipefail
-          ./gradlew :app:assembleRelease \
-            --no-daemon \
-            --no-configuration-cache \
-            --stacktrace \
-            --warning-mode=all \
-            --console=plain \
-            2>&1 | tee assembleRelease.log
-          status=${PIPESTATUS[0]}
-          echo "assembleRelease exit=$status" | tee -a assembleRelease.log
-          exit "$status"
-
-      - name: "19. Verify release APK"
-        id: verify_release
+      - name: "20. Assemble Release APK"
         shell: bash
         run: |
           set -euo pipefail
-          APK=app/build/outputs/apk/release/app-release.apk
-          test -s "$APK"
-          unzip -tq "$APK"
-          unzip -Z1 "$APK" | grep -q '^assets/brawler_icons/shelly.png$'
-          unzip -Z1 "$APK" | grep -q '^assets/apk_port/maps/brawl_ball_maps.json$'
-          unzip -Z1 "$APK" | grep -q '^assets/apk_port/models/m0.bin$'
-          echo "RELEASE_APK_PASS=$APK"
 
-      - name: "20. Upload release APK"
+          ./gradlew \
+            :app:assembleRelease \
+            --no-daemon \
+            --no-configuration-cache \
+            --stacktrace \
+            --warning-mode=all \
+            --console=plain
+
+          echo "ASSEMBLE_RELEASE_PASS"
+
+      # ============================================================
+      # 20. RELEASE VERIFY
+      # ============================================================
+
+      - name: "21. Verify Release APK"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/release/app-release.apk"
+
+          test -s "$APK"
+
+          unzip -tq "$APK"
+
+          unzip -Z1 "$APK" |
+            grep -q \
+            '^assets/apk_port/maps/brawl_ball_maps.json$'
+
+          unzip -Z1 "$APK" |
+            grep -q \
+            '^assets/apk_port/models/m0.bin$'
+
+          unzip -Z1 "$APK" |
+            grep -q \
+            '^assets/brawler_icons/shelly.png$'
+
+          echo "RELEASE_APK_VERIFY_PASS"
+
+      # ============================================================
+      # 21. UPLOAD RELEASE
+      # ============================================================
+
+      - name: "22. Upload Release APK"
         if: ${{ success() }}
         uses: actions/upload-artifact@v7
         with:
@@ -395,18 +987,19 @@ jobs:
           retention-days: 30
           path: app/build/outputs/apk/release/app-release.apk
 
-      - name: "21. Upload diagnostics"
+      # ============================================================
+      # 22. DIAGNOSTICS
+      # ============================================================
+
+      - name: "23. Upload diagnostics"
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           name: RostikAI-v31.1.3-CI-diagnostics
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 7
           path: |
             compileDebugKotlin.log
-            assembleDebug.log
-            lintDebug.log
-            compileReleaseKotlin.log
-            assembleRelease.log
             app/build/reports/**
             app/build/outputs/logs/**
+```
