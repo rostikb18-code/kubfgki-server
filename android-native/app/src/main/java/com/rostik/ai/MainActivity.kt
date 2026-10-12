@@ -8,8 +8,11 @@ import android.text.InputType
 import android.view.Gravity
 import android.widget.*
 import android.graphics.drawable.GradientDrawable
+import org.json.JSONArray
+import org.json.JSONObject
 
 class MainActivity : Activity() {
+    // Starter list only: real 108-icon asset pack has not been imported yet.
     private val brawlers = listOf(
         "Shelly","Nita","Colt","Bull","Brock","El Primo","Barley","Poco","Rosa",
         "Jessie","Dynamike","Tick","8-Bit","Rico","Darryl","Penny","Carl","Jacky",
@@ -20,14 +23,20 @@ class MainActivity : Activity() {
     private lateinit var search: EditText
     private lateinit var selectedLabel: TextView
     private lateinit var status: TextView
+    private lateinit var currentTrophies: EditText
+    private lateinit var targetTrophies: EditText
+    private lateinit var queueView: LinearLayout
     private var selected = "Shelly"
+    private val queue = linkedMapOf<String, Pair<Int, Int>>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Color.rgb(13, 17, 29)
         window.navigationBarColor = Color.rgb(13, 17, 29)
+        loadQueue()
         buildUi()
         renderBrawlers("")
+        renderQueue()
     }
 
     private fun buildUi() {
@@ -67,28 +76,34 @@ class MainActivity : Activity() {
         selectedLabel = label("Выбран: $selected", 13, Color.LTGRAY, false)
         card.addView(selectedLabel)
 
-        val current = EditText(this).apply {
-            hint = "Текущие кубки"
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setSingleLine(); setTextColor(Color.WHITE); setHintTextColor(Color.GRAY)
-            background = rounded(Color.rgb(28,35,52), 12); setPadding(dp(12),0,dp(12),0)
-        }
-        val target = EditText(this).apply {
-            hint = "Целевые кубки"
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setSingleLine(); setTextColor(Color.WHITE); setHintTextColor(Color.GRAY)
-            background = rounded(Color.rgb(28,35,52), 12); setPadding(dp(12),0,dp(12),0)
-        }
+        currentTrophies = trophyInput("Текущие кубки")
+        targetTrophies = trophyInput("Целевые кубки")
         val trophyRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        trophyRow.addView(current, LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(6); topMargin = dp(8) })
-        trophyRow.addView(target, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6); topMargin = dp(8) })
+        trophyRow.addView(currentTrophies, LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(6); topMargin = dp(8) })
+        trophyRow.addView(targetTrophies, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6); topMargin = dp(8) })
         card.addView(trophyRow)
+        card.addView(actionButton("ДОБАВИТЬ В ОЧЕРЕДЬ", Color.rgb(46, 130, 180)) {
+            val current = currentTrophies.text.toString().toIntOrNull()
+            val target = targetTrophies.text.toString().toIntOrNull()
+            if (current == null || target == null || current < 0 || target < 0) {
+                Toast.makeText(this, "Введи текущие и целевые кубки", Toast.LENGTH_SHORT).show()
+            } else {
+                queue[selected] = current to target
+                saveQueue()
+                renderQueue()
+                Toast.makeText(this, "$selected добавлен в очередь", Toast.LENGTH_SHORT).show()
+            }
+        }.also { it.isAllCaps = false }, LinearLayout.LayoutParams(-1, dp(46)).apply { topMargin = dp(10) })
         content.addView(card)
 
         content.addView(space(12))
         val queueCard = panel()
         queueCard.addView(label("ОЧЕРЕДЬ", 15, Color.WHITE, true))
-        queueCard.addView(label("Очередь и сохранение настроек пока не подключены.", 13, Color.LTGRAY, false))
+        queueView = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        queueCard.addView(queueView)
+        queueCard.addView(actionButton("ОЧИСТИТЬ ОЧЕРЕДЬ", Color.rgb(100, 68, 79)) {
+            queue.clear(); saveQueue(); renderQueue()
+        }.also { it.isAllCaps = false }, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(8) })
         content.addView(queueCard)
         content.addView(space(12))
         val controlCard = panel()
@@ -97,9 +112,8 @@ class MainActivity : Activity() {
         controlCard.addView(status)
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         buttons.addView(actionButton("START", Color.rgb(46, 180, 117)) {
-            status.text = "Состояние: игровой AI ещё не подключён"
-            status.setTextColor(Color.rgb(255,205,95))
-            Toast.makeText(this@MainActivity, "Автоигра пока не подключена — запуск не имитируется", Toast.LENGTH_LONG).show()
+            status.text = "AI не подключён — матч не запускается"
+            Toast.makeText(this@MainActivity, "Сначала требуется подключить экранное распознавание и игровой контроллер", Toast.LENGTH_LONG).show()
         }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(4); topMargin = dp(10) })
         buttons.addView(actionButton("PAUSE", Color.rgb(73, 103, 168)) {
             status.text = "Состояние: AI не запущен"
@@ -126,6 +140,13 @@ class MainActivity : Activity() {
                 setOnClickListener {
                     selected = name
                     selectedLabel.text = "Выбран: $selected"
+                    queue[selected]?.let { (current, target) ->
+                        currentTrophies.setText(current.toString())
+                        targetTrophies.setText(target.toString())
+                    } ?: run {
+                        currentTrophies.setText("")
+                        targetTrophies.setText("")
+                    }
                     renderBrawlers(search.text.toString())
                 }
             }
@@ -134,6 +155,49 @@ class MainActivity : Activity() {
         if (list.childCount == 0) list.addView(label("Ничего не найдено", 13, Color.LTGRAY, false))
     }
 
+    private fun renderQueue() {
+        if (!::queueView.isInitialized) return
+        queueView.removeAllViews()
+        if (queue.isEmpty()) {
+            queueView.addView(label("Очередь пока пустая", 13, Color.LTGRAY, false))
+            return
+        }
+        queue.forEach { (name, trophies) ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            row.addView(label("$name  •  ${trophies.first} → ${trophies.second}", 14, Color.WHITE, false),
+                LinearLayout.LayoutParams(0, dp(42), 1f))
+            row.addView(actionButton("×", Color.rgb(100, 68, 79)) {
+                queue.remove(name); saveQueue(); renderQueue()
+            }, LinearLayout.LayoutParams(dp(44), dp(38)))
+            queueView.addView(row)
+        }
+    }
+
+    private fun saveQueue() {
+        val array = JSONArray()
+        queue.forEach { (name, values) ->
+            array.put(JSONObject().put("name", name).put("current", values.first).put("target", values.second))
+        }
+        getSharedPreferences("rostikai", MODE_PRIVATE).edit().putString("queue", array.toString()).apply()
+    }
+
+    private fun loadQueue() {
+        val raw = getSharedPreferences("rostikai", MODE_PRIVATE).getString("queue", "[]") ?: "[]"
+        try {
+            val array = JSONArray(raw)
+            for (i in 0 until array.length()) {
+                val item = array.getJSONObject(i)
+                queue[item.getString("name")] = item.getInt("current") to item.getInt("target")
+            }
+        } catch (_: Exception) { queue.clear() }
+    }
+
+    private fun trophyInput(hintText: String) = EditText(this).apply {
+        hint = hintText
+        inputType = InputType.TYPE_CLASS_NUMBER
+        setSingleLine(); setTextColor(Color.WHITE); setHintTextColor(Color.GRAY)
+        background = rounded(Color.rgb(28,35,52), 12); setPadding(dp(12),0,dp(12),0)
+    }
     private fun panel() = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(14), dp(14), dp(14), dp(14))
