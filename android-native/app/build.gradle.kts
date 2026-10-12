@@ -15,7 +15,14 @@ android {
         versionName = "1.1.0"
     }
 
-    kotlinOptions { jvmTarget = "17" }
+    // Keep Java and Kotlin bytecode targets aligned; Gradle rejects mixed 1.8/17 targets.
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
 }
 
 dependencies {
