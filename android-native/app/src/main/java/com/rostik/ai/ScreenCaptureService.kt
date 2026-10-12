@@ -218,8 +218,7 @@ class ScreenCaptureService : Service() {
                 val red = bytes[offset].toInt() and 0xff
                 val green = bytes[offset + 1].toInt() and 0xff
                 val blue = bytes[offset + 2].toInt() and 0xff
-                val alpha = bytes[offset + 3].toInt() and 0xff
-                pixels[outputBase + x] = Color.argb(alpha, red, green, blue)
+                pixels[outputBase + x] = Color.argb(255, red, green, blue)
             }
         }
         return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
