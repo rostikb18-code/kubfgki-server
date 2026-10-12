@@ -60,6 +60,7 @@ class OverlayService : Service() {
     private var brawlerCountView: TextView? = null
     private var brawlerGridScroll: ScrollView? = null
     private var searchRefreshRunnable: Runnable? = null
+    private var pendingStartRunnable: Runnable? = null
 
     private val selected = linkedSetOf<String>()
     private val draft = linkedMapOf<String, Pair<Int, Int>>()
@@ -99,6 +100,8 @@ class OverlayService : Service() {
         try { panel?.let(wm::removeView) } catch (_: Throwable) {}
         searchRefreshRunnable?.let(mainHandler::removeCallbacks)
         searchRefreshRunnable = null
+        pendingStartRunnable?.let(mainHandler::removeCallbacks)
+        pendingStartRunnable = null
         avatarExecutor.shutdownNow()
         synchronized(avatarCache) { avatarCache.evictAll() }
         bubble = null
@@ -1094,11 +1097,13 @@ class OverlayService : Service() {
             }
         }, LinearLayout.LayoutParams(0, -1, 1f).apply { setMargins(dp(2), 0, dp(2), 0) })
         row.addView(actionButton("■  СТОП", Color.rgb(246, 61, 104)) {
+            // Cancel a delayed START before stopping the service.
+            pendingStartRunnable?.let(mainHandler::removeCallbacks)
+            pendingStartRunnable = null
             BotRuntime.supervisor.stop()
-            DiscordLogger.info(DiscordLogger.Category.BOT, "STOP из overlay", "Пользователь остановил бота")
-            toast("Бот остановлен — можно снова нажать START")
-            // Keep the overlay alive. STOP ends the automation run, not the
-            // control surface, so the user can correct cups/targets and START again.
+            DiscordLogger.info(DiscordLogger.Category.BOT, "STOP из overlay", "Пользователь остановил бота; overlay закрывается")
+            toast("Бот остановлен")
+            stopSelf()
         }, LinearLayout.LayoutParams(0, -1, 1f).apply { setMargins(dp(4), 0, 0, 0) })
         return row
     }
@@ -1203,18 +1208,22 @@ class OverlayService : Service() {
 
         // Give Android/game startup a short head start. The supervisor itself is
         // still perception-driven and will wait on UNKNOWN/LOADING screens.
-        mainHandler.postDelayed({
-            if (!BotRuntime.supervisor.isRunning()) {
-                BotRuntime.supervisor.start()
-                DiscordLogger.info(
-                    DiscordLogger.Category.BOT,
-                    "START из overlay",
-                    BotRuntime.supervisor.status(),
-                    mapOf("queue" to items.joinToString(",") { "${it.brawlerId}:${it.currentCups}->${it.targetCups}" })
-                )
-                toast("Бот запущен — Brawl Stars открыт")
-            }
-        }, 1600L)
+        pendingStartRunnable?.let(mainHandler::removeCallbacks)
+        val startRunnable = Runnable {
+            pendingStartRunnable = null
+            // Do not start if STOP/service teardown happened during game launch.
+            if (panel == null || !expanded || BotRuntime.supervisor.isRunning()) return@Runnable
+            BotRuntime.supervisor.start()
+            DiscordLogger.info(
+                DiscordLogger.Category.BOT,
+                "START из overlay",
+                BotRuntime.supervisor.status(),
+                mapOf("queue" to items.joinToString(",") { "${it.brawlerId}:${it.currentCups}->${it.targetCups}" })
+            )
+            toast("Бот запущен — Brawl Stars открыт")
+        }
+        pendingStartRunnable = startRunnable
+        mainHandler.postDelayed(startRunnable, 1600L)
     }
 
     private fun loadDraft() {
