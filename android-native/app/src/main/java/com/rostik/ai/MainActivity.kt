@@ -127,6 +127,28 @@ class MainActivity : Activity() {
         controlCard.addView(label("УПРАВЛЕНИЕ", 15, Color.WHITE, true))
         status = label("Состояние: готов к настройке", 13, Color.rgb(255, 205, 95), false)
         controlCard.addView(status)
+        controlCard.addView(actionButton("ПРОВЕРИТЬ ONNX-МОДЕЛИ", Color.rgb(98, 78, 153)) {
+            status.text = "Проверяю реальные .onnx-файлы на устройстве…"
+            ioExecutor.execute {
+                val result = try {
+                    OnDeviceModelRegistry(applicationContext).use { registry ->
+                        registry.discoverAndOpen()
+                    }
+                } catch (error: Exception) {
+                    android.util.Log.e("RostikModelRegistry", "Model audit failed", error)
+                    emptyList()
+                }
+                mainHandler.post {
+                    status.text = if (result.isEmpty()) {
+                        "ИИ: 0 моделей найдено. Файлы .onnx ещё не добавлены; автоматическая игра не работает."
+                    } else {
+                        "ONNX: ${result.size} модель(и) открыто. " + result.joinToString(" | ") {
+                            "${it.assetPath.substringAfterLast('/')} входы=${it.inputs.size}, выходы=${it.outputs.size}"
+                        } + ". Точность и игровой цикл этим не подтверждены."
+                    }
+                }
+            }
+        }.also { it.isAllCaps = false }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(8) })
         controlCard.addView(actionButton("НАСТРОИТЬ ЖЕСТЫ ANDROID", Color.rgb(70, 88, 135)) {
             status.text = "Включи RostikAI в настройках специальных возможностей Android"
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
