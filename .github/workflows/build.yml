@@ -83,6 +83,19 @@ jobs:
           test -f app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
 
+          # Apply the canonical UI source after extracting the ZIP parts.
+          # This prevents the archives from silently restoring the old overlay UI.
+          mapfile -t OVERLAY_SOURCES < <(find app/src/main/java -type f -name 'OverlayService.kt' -print)
+          if [ "${#OVERLAY_SOURCES[@]}" -ne 1 ]; then
+            echo "ERROR: expected exactly one OverlayService.kt in assembled Android source, found ${#OVERLAY_SOURCES[@]}"
+            printf '%s\n' "${OVERLAY_SOURCES[@]}"
+            exit 1
+          fi
+          test -s overrides/OverlayService.kt
+          cp -f overrides/OverlayService.kt "${OVERLAY_SOURCES[0]}"
+          cmp -s overrides/OverlayService.kt "${OVERLAY_SOURCES[0]}"
+          echo "CANONICAL OVERLAY SOURCE APPLIED: ${OVERLAY_SOURCES[0]}"
+
           echo "PROJECT ASSEMBLY OK"
 
       # ============================================================
