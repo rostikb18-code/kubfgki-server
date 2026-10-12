@@ -15,13 +15,14 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
+import android.os.HandlerThread
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
 
 /**
- * On-device MediaProjection capture foundation.
- * This service captures frames only; it does NOT recognize the game or control gameplay yet.
+ * MediaProjection capture with experimental color-cue diagnostics.
+ * Color cues are not verified game recognition; this service deliberately sends no gameplay gestures.
  */
 class ScreenCaptureService : Service() {
     companion object {
@@ -39,6 +40,7 @@ class ScreenCaptureService : Service() {
     private var imageReader: ImageReader? = null
     private var lastSampleAt = 0L
     private var sampledFrames = 0L
+    private var analysisThread: HandlerThread? = null
     private val gameAiPipeline = GameAiPipeline()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -87,7 +89,7 @@ class ScreenCaptureService : Service() {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
         }.setContentTitle("RostikAI")
-            .setContentText("Захват экрана активен; игровой анализ ещё не подключён")
+            .setContentText("Захват экрана активен; распознавание бойцов не подтверждено")
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .setOngoing(true)
             .build()
@@ -117,6 +119,9 @@ class ScreenCaptureService : Service() {
         val density = metrics.densityDpi
         val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
         imageReader = reader
+        // Frame analysis is CPU work: keep it off the main looper to avoid freezing the UI.
+        val worker = HandlerThread("RostikAI-FrameAnalysis").also { it.start() }
+        analysisThread = worker
         reader.setOnImageAvailableListener({ source ->
             val frame = source.acquireLatestImage() ?: return@setOnImageAvailableListener
             try {
@@ -138,7 +143,7 @@ class ScreenCaptureService : Service() {
             } finally {
                 frame.close()
             }
-        }, android.os.Handler(mainLooper))
+        }, android.os.Handler(worker.looper))
         virtualDisplay = projection?.createVirtualDisplay(
             "RostikAI-Capture",
             width,
@@ -150,7 +155,7 @@ class ScreenCaptureService : Service() {
             null
         )
         if (virtualDisplay == null) throw IllegalStateException("VirtualDisplay creation failed")
-        Log.i(TAG, "Screen capture started: ${width}x${height}; no game-state inference is connected")
+        Log.i(TAG, "Screen capture started: ${width}x${height}; experimental color diagnostics only; actions disabled")
     }
 
 
@@ -207,6 +212,8 @@ class ScreenCaptureService : Service() {
         try { imageReader?.setOnImageAvailableListener(null, null) } catch (_: Exception) {}
         try { imageReader?.close() } catch (_: Exception) {}
         imageReader = null
+        try { analysisThread?.quitSafely() } catch (_: Exception) {}
+        analysisThread = null
         try { projection?.stop() } catch (_: Exception) {}
         projection = null
     }
