@@ -119,6 +119,10 @@ class MainActivity : Activity() {
         controlCard.addView(label("УПРАВЛЕНИЕ", 15, Color.WHITE, true))
         status = label("Состояние: готов к настройке", 13, Color.rgb(255, 205, 95), false)
         controlCard.addView(status)
+        controlCard.addView(actionButton("НАСТРОИТЬ ЖЕСТЫ ANDROID", Color.rgb(70, 88, 135)) {
+            status.text = "Включи RostikAI в настройках специальных возможностей Android"
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }.also { it.isAllCaps = false }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(8) })
         val prefs = getSharedPreferences("rostikai", MODE_PRIVATE)
         val savedWidth = prefs.getInt("overlay_width", 64).coerceIn(44, 120)
         val savedHeight = prefs.getInt("overlay_height", 64).coerceIn(44, 120)
