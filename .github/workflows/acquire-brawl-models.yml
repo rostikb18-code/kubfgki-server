@@ -5,6 +5,8 @@ on:
   push:
     paths:
       - ".github/workflows/acquire-brawl-models.yml"
+      - "ml-training/validate_detector_onnx.py"
+      - "ml-training/README.md"
 
 permissions:
   contents: read
@@ -41,20 +43,38 @@ jobs:
           mkdir -p model-audit/source model-audit/report
           url="https://huggingface.co/datasets/BlackPymer2/BrawlStars-gameplay/resolve/main/train_hp.py"
           if curl --fail --location --retry 2 --retry-delay 2 "$url" --output model-audit/source/train_hp.py; then
-            if grep -Eq 'class[[:space:]]+CRNN|def[[:space:]]+preprocess|def[[:space:]]+decode' model-audit/source/train_hp.py; then
+            source_file="model-audit/source/train_hp.py"
+            # Require every expected entry point; one matching token is not enough.
+            missing=()
+            grep -Eq "class[[:space:]]+CRNN" "$source_file" || missing+=("CRNN class")
+            grep -Eq "def[[:space:]]+preprocess" "$source_file" || missing+=("preprocess function")
+            grep -Eq "def[[:space:]]+decode" "$source_file" || missing+=("decode function")
+            syntax_ok=true
+            python -m py_compile "$source_file" || syntax_ok=false
+            if ((${#missing[@]} == 0)) && [[ "$syntax_ok" == true ]]; then
               {
                 echo "# HP OCR architecture source audit"
                 echo
                 echo "- Source URL: $url"
                 echo "- Download: successful"
-                echo "- CRNN/preprocess/decode symbols: detected"
+                echo "- Python syntax: valid"
+                echo "- Required symbols: CRNN, preprocess, decode (all detected)"
                 echo "- SHA-256:"
-                sha256sum model-audit/source/train_hp.py
+                sha256sum "$source_file"
                 echo
-                echo "This source is a candidate for matching the checkpoint. Its architecture, checkpoint keys, preprocessing dimensions and decoder must still be verified before ONNX export."
+                echo "This source is only a candidate for matching the checkpoint. State-dict compatibility, input dimensions, preprocessing, class mapping and decoder behavior remain unverified; ONNX export is intentionally not attempted."
               } > model-audit/report/hp-source-audit.md
             else
-              echo "Downloaded train_hp.py but expected CRNN/preprocess/decode symbols were not found." > model-audit/report/hp-source-audit.md
+              {
+                echo "# HP OCR architecture source audit"
+                echo
+                echo "- Source URL: $url"
+                echo "- Download: successful, but source validation failed"
+                echo "- Missing symbols: ${missing[*]:-none}"
+                echo "- Python syntax check passed: $syntax_ok"
+                echo "- No ONNX export attempted."
+              } > model-audit/report/hp-source-audit.md
+              rm -f "$source_file"
             fi
           else
             rm -f model-audit/source/train_hp.py
