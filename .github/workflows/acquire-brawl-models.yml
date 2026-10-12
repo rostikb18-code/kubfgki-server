@@ -1,0 +1,87 @@
+name: Acquire and audit Brawl Stars vision weights
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/acquire-brawl-models.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  acquire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download published checkpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p model-audit/source model-audit/onnx model-audit/report
+          cd model-audit/source
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "https://huggingface.co/datasets/BlackPymer2/BrawlStars-gameplay/resolve/main/best.pt" \
+            --output best.pt
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "https://huggingface.co/datasets/BlackPymer2/BrawlStars-gameplay/resolve/main/hp_crnn_best.pt" \
+            --output hp_crnn_best.pt
+          test -s best.pt
+          test -s hp_crnn_best.pt
+          sha256sum best.pt hp_crnn_best.pt | tee ../report/source-sha256.txt
+          file best.pt hp_crnn_best.pt | tee ../report/file-types.txt
+          stat -c '%n %s bytes' best.pt hp_crnn_best.pt | tee ../report/file-sizes.txt
+
+      - name: Export detector checkpoint to ONNX and validate graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install ultralytics onnx
+          python - <<'PY'
+          from pathlib import Path
+          from ultralytics import YOLO
+          import onnx
+          source = Path("model-audit/source/best.pt")
+          out = Path("model-audit/onnx/scene_detector.onnx")
+          model = YOLO(str(source))
+          model.export(format="onnx", imgsz=640, opset=17, simplify=False, dynamic=False)
+          exported = source.with_suffix(".onnx")
+          if not exported.exists():
+              raise SystemExit(f"Expected export not found: {exported}")
+          exported.replace(out)
+          graph = onnx.load(str(out), load_external_data=True)
+          onnx.checker.check_model(graph)
+          print("ONNX graph check passed")
+          print("Inputs:", [(x.name, [d.dim_value or d.dim_param for d in x.type.tensor_type.shape.dim]) for x in graph.graph.input])
+          print("Outputs:", [(x.name, [d.dim_value or d.dim_param for d in x.type.tensor_type.shape.dim]) for x in graph.graph.output])
+          print("Labels:", model.names)
+          PY
+          sha256sum model-audit/onnx/scene_detector.onnx | tee model-audit/report/onnx-sha256.txt
+          stat -c '%n %s bytes' model-audit/onnx/scene_detector.onnx | tee model-audit/report/onnx-size.txt
+
+      - name: Write explicit compatibility status
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > model-audit/report/STATUS.md <<'EOF'
+          # Brawl Stars model acquisition report
+
+          - best.pt is the upstream YOLO26s detector checkpoint; it is exported here as scene_detector.onnx.
+          - The ONNX graph is syntactically checked. This does NOT prove detection accuracy on RostikAI screenshots.
+          - hp_crnn_best.pt is preserved as an upstream PyTorch checkpoint. It is NOT converted here because its CRNN class/preprocessing/decoder contract must be imported from the matching upstream training code before a valid export.
+          - These files do not implement the other three required model roles (terrain_segmenter, gas_segmenter, tactical_policy).
+          - The files are uploaded as a workflow artifact rather than committed to Git history: binary checkpoints are large, and committing them would inflate every clone. They are not yet wired into the app runtime.
+          - Source: https://huggingface.co/datasets/BlackPymer2/BrawlStars-gameplay (Apache-2.0 according to its model card).
+          - Before enabling any action execution, evaluate against a held-out set of labelled frames and verify Android ONNX Runtime input/output handling.
+          EOF
+
+      - name: Upload downloaded weights, ONNX export and audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: rostik-ai-model-acquisition
+          path: model-audit/
+          if-no-files-found: error
+          retention-days: 30
