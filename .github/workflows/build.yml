@@ -289,7 +289,39 @@ jobs:
           echo "RELEASE BUILD SUCCESS"
 
       # ============================================================
-      # 11. UPLOAD RELEASE APK
+      # 11. LOCATE AND STAGE RELEASE APK
+      # ============================================================
+
+      - name: Locate Release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p artifacts/release
+
+          mapfile -t RELEASE_APKS < <(
+            find app/build/outputs/apk/release \
+              -type f -name '*.apk' -print 2>/dev/null | sort
+          )
+
+          if [ "${#RELEASE_APKS[@]}" -eq 0 ]; then
+            echo "::warning::Release task completed but no release APK file was found."
+            echo "Available APK outputs:"
+            find app/build/outputs -type f -name '*.apk' -print || true
+            exit 1
+          fi
+
+          SOURCE_APK="${RELEASE_APKS[0]}"
+          cp -f "$SOURCE_APK" artifacts/release/RostikAI-v31.1.3-Release.apk
+
+          echo "Release APK source: $SOURCE_APK"
+          ls -lh artifacts/release/RostikAI-v31.1.3-Release.apk
+
+          unzip -tq artifacts/release/RostikAI-v31.1.3-Release.apk
+          echo "RELEASE APK STAGED OK"
+
+      # ============================================================
+      # 12. UPLOAD RELEASE APK
       # ============================================================
 
       - name: Upload Release APK
@@ -299,7 +331,7 @@ jobs:
           name: RostikAI-v31.1.3-Release-APK
           if-no-files-found: error
           retention-days: 30
-          path: app/build/outputs/apk/release/app-release.apk
+          path: artifacts/release/RostikAI-v31.1.3-Release.apk
 
       # ============================================================
       # 12. LOGS ONLY IF SOMETHING FAILED
