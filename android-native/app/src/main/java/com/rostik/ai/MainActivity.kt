@@ -6,7 +6,6 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
-import android.view.ViewGroup
 import android.widget.*
 import android.graphics.drawable.GradientDrawable
 
@@ -19,10 +18,9 @@ class MainActivity : Activity() {
     )
     private lateinit var list: LinearLayout
     private lateinit var search: EditText
+    private lateinit var selectedLabel: TextView
     private lateinit var status: TextView
     private var selected = "Shelly"
-    private var running = false
-    private var paused = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,7 +64,9 @@ class MainActivity : Activity() {
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         listScroll.addView(list)
         card.addView(listScroll, LinearLayout.LayoutParams(-1, dp(190)).apply { topMargin = dp(8) })
-        card.addView(label("Выбран: ", 13, Color.LTGRAY, false).also { it.tag = "selectedLabel" })
+        selectedLabel = label("Выбран: $selected", 13, Color.LTGRAY, false)
+        card.addView(selectedLabel)
+
         val current = EditText(this).apply {
             hint = "Текущие кубки"
             inputType = InputType.TYPE_CLASS_NUMBER
@@ -88,7 +88,7 @@ class MainActivity : Activity() {
         content.addView(space(12))
         val queueCard = panel()
         queueCard.addView(label("ОЧЕРЕДЬ", 15, Color.WHITE, true))
-        queueCard.addView(label("Выбери бойца выше. Список очереди будет добавлен в следующей итерации.", 13, Color.LTGRAY, false))
+        queueCard.addView(label("Очередь и сохранение настроек пока не подключены.", 13, Color.LTGRAY, false))
         content.addView(queueCard)
         content.addView(space(12))
         val controlCard = panel()
@@ -97,20 +97,18 @@ class MainActivity : Activity() {
         controlCard.addView(status)
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         buttons.addView(actionButton("START", Color.rgb(46, 180, 117)) {
-            status.text = "Состояние: интерфейс готов; игровой AI ещё не подключён"
+            status.text = "Состояние: игровой AI ещё не подключён"
             status.setTextColor(Color.rgb(255,205,95))
-            Toast.makeText(this@MainActivity, "Автоигра пока не подключена — не буду имитировать запуск", Toast.LENGTH_LONG).show()
+            Toast.makeText(this@MainActivity, "Автоигра пока не подключена — запуск не имитируется", Toast.LENGTH_LONG).show()
         }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(4); topMargin = dp(10) })
         buttons.addView(actionButton("PAUSE", Color.rgb(73, 103, 168)) {
-            paused = !paused
-            status.text = if (paused) "Состояние: пауза интерфейса" else "Состояние: готов к настройке"
+            status.text = "Состояние: AI не запущен"
         }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(4); rightMargin = dp(4); topMargin = dp(10) })
         buttons.addView(actionButton("STOP", Color.rgb(191, 69, 82)) {
-            running = false; paused = false
             status.text = "Состояние: остановлено"
         }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(4); topMargin = dp(10) })
         controlCard.addView(buttons)
-        controlCard.addView(label("Важно: эта сборка — новая основа приложения. Автоматическое распознавание и управление матчем ещё не реализованы.", 12, Color.rgb(174,184,205), false))
+        controlCard.addView(label("Это новая основа приложения, не готовый автономный игровой бот. Распознавание экрана и управление матчем ещё не реализованы.", 12, Color.rgb(174,184,205), false))
         content.addView(controlCard)
         setContentView(root)
     }
@@ -127,8 +125,8 @@ class MainActivity : Activity() {
                 background = if (name == selected) rounded(Color.rgb(35, 57, 60), 9) else null
                 setOnClickListener {
                     selected = name
+                    selectedLabel.text = "Выбран: $selected"
                     renderBrawlers(search.text.toString())
-                    findViewWithTag<TextView>("selectedLabel")?.text = "Выбран: $selected"
                 }
             }
             list.addView(row, LinearLayout.LayoutParams(-1, dp(42)))
