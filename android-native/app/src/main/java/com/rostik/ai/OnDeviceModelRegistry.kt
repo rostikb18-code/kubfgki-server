@@ -71,7 +71,7 @@ class OnDeviceModelRegistry(private val context: Context) : AutoCloseable {
             emptyList()
         }
         return entries.flatMap { name ->
-            val path = "$" + "{directory}/$" + "{name}"
+            val path = "${directory}/${name}"
             val children = try { context.assets.list(path)?.toList().orEmpty() } catch (_: Exception) { emptyList() }
             when {
                 name.endsWith(".onnx", ignoreCase = true) -> listOf(path)
