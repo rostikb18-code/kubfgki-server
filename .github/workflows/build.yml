@@ -137,6 +137,15 @@ jobs:
               file "$model"
             done
           fi
+          {
+            echo "# RostikAI AI asset readiness"
+            echo
+            echo "- Brawler portraits bundled: **$ICON_COUNT** (target 108)"
+            echo "- ONNX model files bundled: **$MODEL_COUNT** (target 5)"
+            echo "- Status: **$([ "$MODEL_COUNT" -eq 5 ] && echo "assets present; compatibility and quality still unverified" || echo "NOT READY — five models are not bundled")**"
+            echo
+            echo "This is an asset-count report only. It does not establish model licenses, model-specific preprocessing/decoding, inference quality, or working gameplay automation."
+          } | tee ai-readiness-report.md | tee -a "$GITHUB_STEP_SUMMARY"
           echo "Asset counts alone do not verify model validity, provenance, tensor compatibility, or inference quality."
 
       - name: Build debug APK
@@ -166,6 +175,7 @@ jobs:
           path: |
             android-native/app/build/outputs/apk/debug/app-debug.apk
             android-native/app/build/outputs/apk/debug/SHA256.txt
+            ai-readiness-report.md
           if-no-files-found: error
           retention-days: 14
 
