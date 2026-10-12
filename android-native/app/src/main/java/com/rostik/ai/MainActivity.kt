@@ -17,13 +17,19 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 class MainActivity : Activity() {
-    // Starter list only: real 108-icon asset pack has not been imported yet.
-    private val brawlers = listOf(
+    private data class BrawlerEntry(val id: Int, val name: String, val imageUrl: String)
+    private val starterNames = listOf(
         "Shelly","Nita","Colt","Bull","Brock","El Primo","Barley","Poco","Rosa",
         "Jessie","Dynamike","Tick","8-Bit","Rico","Darryl","Penny","Carl","Jacky",
         "Gus","Bo","Emz","Stu","Max","Bibi","Bea","Nani","Edgar","Griff","Grom",
         "Bonnie","Hank","Pearl","Larry & Lawrie","Angelo","Berry","Shade","Meeple"
     )
+    private val brawlers = mutableListOf<BrawlerEntry>().apply {
+        addAll(starterNames.map { BrawlerEntry(-1, it, "") })
+    }
+    private val imageCache = java.util.concurrent.ConcurrentHashMap<String, android.graphics.Bitmap>()
+    private val ioExecutor = java.util.concurrent.Executors.newFixedThreadPool(3)
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private lateinit var list: LinearLayout
     private lateinit var search: EditText
     private lateinit var selectedLabel: TextView
@@ -46,6 +52,7 @@ class MainActivity : Activity() {
         buildUi()
         renderBrawlers("")
         renderQueue()
+        refreshBrawlerCatalog()
     }
 
     private fun buildUi() {
@@ -232,13 +239,27 @@ class MainActivity : Activity() {
     private fun renderBrawlers(query: String) {
         if (!::list.isInitialized) return
         list.removeAllViews()
-        brawlers.filter { it.contains(query.trim(), ignoreCase = true) }.forEach { name ->
-            val row = TextView(this).apply {
-                text = (if (name == selected) "●  " else "○  ") + name
-                textSize = 15f
-                setTextColor(if (name == selected) Color.rgb(107, 231, 177) else Color.WHITE)
-                setPadding(dp(12), dp(10), dp(8), dp(10))
+        brawlers.filter { it.name.contains(query.trim(), ignoreCase = true) }.forEach { entry ->
+            val name = entry.name
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(8), dp(3), dp(8), dp(3))
                 background = if (name == selected) rounded(Color.rgb(35, 57, 60), 9) else null
+                val portrait = ImageView(this@MainActivity).apply {
+                    layoutParams = LinearLayout.LayoutParams(dp(34), dp(34)).apply { rightMargin = dp(10) }
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    setImageResource(android.R.drawable.ic_menu_gallery)
+                    tag = entry.imageUrl
+                }
+                addView(portrait)
+                addView(TextView(this@MainActivity).apply {
+                    text = (if (name == selected) "●  " else "○  ") + name
+                    textSize = 15f
+                    setTextColor(if (name == selected) Color.rgb(107, 231, 177) else Color.WHITE)
+                    gravity = Gravity.CENTER_VERTICAL
+                }, LinearLayout.LayoutParams(0, -1, 1f))
+                if (entry.imageUrl.isNotBlank()) loadPortrait(entry.imageUrl, portrait)
                 setOnClickListener {
                     selected = name
                     selectedLabel.text = "Выбран: $selected"
@@ -252,9 +273,62 @@ class MainActivity : Activity() {
                     renderBrawlers(search.text.toString())
                 }
             }
-            list.addView(row, LinearLayout.LayoutParams(-1, dp(42)))
+            list.addView(row, LinearLayout.LayoutParams(-1, dp(44)))
         }
         if (list.childCount == 0) list.addView(label("Ничего не найдено", 13, Color.LTGRAY, false))
+    }
+
+    private fun refreshBrawlerCatalog() {
+        ioExecutor.execute {
+            try {
+                val connection = java.net.URL("https://api.brawlapi.com/v1/brawlers").openConnection() as java.net.HttpURLConnection
+                connection.connectTimeout = 7000
+                connection.readTimeout = 9000
+                connection.setRequestProperty("Accept", "application/json")
+                val payload = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                connection.disconnect()
+                val source = JSONObject(payload).getJSONArray("list")
+                val loaded = mutableListOf<BrawlerEntry>()
+                for (i in 0 until source.length()) {
+                    val item = source.getJSONObject(i)
+                    val name = item.optString("name").trim()
+                    val id = item.optInt("id", -1)
+                    val image = item.optString("imageUrl2").ifBlank { item.optString("imageUrl") }
+                    if (name.isNotBlank() && id > 0) loaded.add(BrawlerEntry(id, name, image))
+                }
+                if (loaded.isEmpty()) throw IllegalStateException("Brawler catalog was empty")
+                mainHandler.post {
+                    val previousSelection = selected
+                    brawlers.clear()
+                    brawlers.addAll(loaded.distinctBy { it.id })
+                    if (brawlers.none { it.name == previousSelection }) selected = brawlers.first().name
+                    selectedLabel.text = "Выбран: $selected"
+                    renderBrawlers(search.text.toString())
+                    status.text = "Каталог бойцов обновлён: ${brawlers.size}; изображения загружаются из сети"
+                }
+            } catch (error: Exception) {
+                android.util.Log.w("RostikCatalog", "Online brawler catalog unavailable; keeping offline fallback", error)
+                mainHandler.post { if (::status.isInitialized) status.text = "Каталог офлайн: ${brawlers.size} имён; проверь интернет для полного списка" }
+            }
+        }
+    }
+
+    private fun loadPortrait(url: String, target: ImageView) {
+        imageCache[url]?.let { target.setImageBitmap(it); return }
+        ioExecutor.execute {
+            try {
+                val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                connection.connectTimeout = 5000
+                connection.readTimeout = 7000
+                connection.setRequestProperty("User-Agent", "RostikAI-Android")
+                val bitmap = connection.inputStream.use { android.graphics.BitmapFactory.decodeStream(it) }
+                connection.disconnect()
+                if (bitmap != null) {
+                    imageCache[url] = bitmap
+                    mainHandler.post { if (target.tag == url) target.setImageBitmap(bitmap) }
+                }
+            } catch (error: Exception) { android.util.Log.d("RostikCatalog", "Portrait load failed", error) }
+        }
     }
 
     private fun renderQueue() {
