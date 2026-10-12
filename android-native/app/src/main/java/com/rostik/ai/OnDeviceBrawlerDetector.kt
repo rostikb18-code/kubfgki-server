@@ -190,6 +190,7 @@ class OnDeviceBrawlerDetector(context: Context) : AutoCloseable {
         return if (union <= 0f) 0f else intersection / union
     }
 
+    @Synchronized
     override fun close() {
         session.close()
     }
