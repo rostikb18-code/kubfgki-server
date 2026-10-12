@@ -35,7 +35,7 @@ python run_upstream_bot.py --setup-only
 python run_upstream_bot.py --install
 ```
 
-After dependencies install, configure the upstream project's `constants.py` for your BlueStacks window and selected brawler, then launch with:
+For the convenience launcher, double-click `START-UPSTREAM-BOT.bat`; it creates the virtual environment, fetches/verifies the pinned source and installs missing dependencies. It then opens the upstream bot menu. For manual setup, after dependencies install, configure the upstream project's `constants.py` for your BlueStacks window and selected brawler, then launch with:
 
 ```powershell
 python run_upstream_bot.py
