@@ -1,18 +1,18 @@
-# RostikAI Native Android — clean build path
+# RostikAI Native Android — clean project
 
-This is a **new standalone Android project**. It does not extract or depend on the five legacy ZIP parts.
+The old five-part ZIP assembly has been removed from the active build workflow. The Android project is under `android-native/`.
 
-## Build APK on GitHub
+## Build an APK on GitHub
 
-1. Open the repository's **Actions** tab.
-2. Select **RostikAI Native APK (no ZIP parts)**.
-3. Press **Run workflow** and wait for the job to finish.
-4. Open the successful run, download artifact **RostikAI-native-debug-apk**, extract it, and install `app-debug.apk` on the phone.
+1. Open the repository **Actions** tab.
+2. Select **RostikAI Android APK** (the workflow in `.github/workflows/build.yml`).
+3. Use **Run workflow** on the default branch, or wait for the push/pull-request build.
+4. After a successful run, download the `RostikAI-native-debug-apk` artifact and extract `app-debug.apk`.
 
-Requirements for a local build: JDK 17, Android SDK 35/build-tools 35.0.0, Gradle 8.10.2.
+Build configuration: JDK 17, Android SDK 35/build-tools 35.0.0, Gradle 8.10.2. The workflow checks required project files, runs Gradle compilation, verifies that the APK is a non-empty valid ZIP, calculates SHA-256, and uploads the APK. It uploads logs if the build fails.
 
 ## Honest implementation status
 
-The project currently provides a native Android shell with brawler search/selection and editable trophy fields. It is a buildable foundation, **not yet an autonomous gameplay bot**. The listed open-source projects use different host/emulator pipelines and model formats; their gameplay code and model files have not been ported into this project. START deliberately reports this limitation instead of pretending a match is being controlled.
+This is currently a **native Android UI foundation**, not a finished autonomous gameplay bot. The current screen has brawler text search/selection for a starter subset, trophy inputs, and a queue saved on-device. It does **not** yet include the full 108 icon assets, working width/height overlay sliders, MediaProjection capture flow, Accessibility-based game control, ONNX Runtime, five verified trained models, live match perception, or autonomous match control. START intentionally reports that the gameplay controller is not connected.
 
-The displayed brawler list is a starter subset and uses text labels, not the complete 108 icon assets. Queue persistence, live screen perception, ONNX model integration, action execution, MediaProjection consent flow, and match/trophy result verification remain implementation work.
+No APK should be considered built until GitHub Actions reports a successful run and provides the artifact. An Actions build verifies compilation and packaging, not gameplay on a physical phone; device installation and gameplay still require separate testing.
