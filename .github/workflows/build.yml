@@ -61,7 +61,36 @@ jobs:
           grep -q 'ACTION_START' android-native/app/src/main/java/com/rostik/ai/OverlayService.kt
           grep -q 'applicationId = "com.rostik.ai"' android-native/app/build.gradle.kts
           grep -q 'class MainActivity' android-native/app/src/main/java/com/rostik/ai/MainActivity.kt
-          echo "Preflight passed."
+          grep -q 'onnxruntime-android' android-native/app/build.gradle.kts
+          echo "Native project preflight passed."
+
+      - name: Audit AI asset readiness (non-blocking, honest report)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ICON_DIR="android-native/app/src/main/assets/brawler_icons"
+          MODEL_DIR="android-native/app/src/main/assets/models"
+          if [ -d "$ICON_DIR" ]; then
+            ICON_COUNT=$(find "$ICON_DIR" -type f \( -iname '*.png' -o -iname '*.webp' -o -iname '*.jpg' \) | wc -l)
+          else
+            ICON_COUNT=0
+          fi
+          if [ -d "$MODEL_DIR" ]; then
+            MODEL_COUNT=$(find "$MODEL_DIR" -type f -iname '*.onnx' | wc -l)
+          else
+            MODEL_COUNT=0
+          fi
+          echo "Brawler icon files found: $ICON_COUNT (target: 108)"
+          echo "ONNX files found: $MODEL_COUNT (target: 5)"
+          if [ "$ICON_COUNT" -ne 108 ]; then echo "::warning::Expected 108 real brawler icons; found $ICON_COUNT."; fi
+          if [ "$MODEL_COUNT" -ne 5 ]; then echo "::warning::Expected 5 ONNX files; found $MODEL_COUNT."; fi
+          if [ "$MODEL_COUNT" -eq 5 ]; then
+            for model in "$MODEL_DIR"/*.onnx; do
+              test -s "$model" || { echo "::error::Empty ONNX file: $model"; exit 1; }
+              file "$model"
+            done
+          fi
+          echo "Asset counts alone do not verify model validity, provenance, tensor compatibility, or inference quality."
 
       - name: Build debug APK
         working-directory: android-native
