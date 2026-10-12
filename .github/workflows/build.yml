@@ -127,7 +127,7 @@ jobs:
           python -m pip install ultralytics==8.0.184 opencv-python==4.8.1.78 PyYAML==6.0.2 requests==2.32.3 scipy==1.13.1 pandas==2.2.3 matplotlib==3.9.2 psutil==6.1.0 py-cpuinfo==9.0.0 Pillow==10.4.0 tqdm==4.67.0 seaborn==0.13.2 thop==0.1.1.post2209072238 numpy==1.26.4 onnx==1.16.1 onnxruntime==1.20.1
           python android-native/scripts/prepare_brawler_detector.py
 
-      - name: Audit AI asset readiness (non-blocking, honest report)
+      - name: Audit AI asset readiness (model is mandatory)
         shell: bash
         run: |
           set -euo pipefail
@@ -147,12 +147,18 @@ jobs:
           echo "ONNX files found: $MODEL_COUNT (target: 5)"
           if [ "$ICON_COUNT" -ne 108 ]; then echo "::warning::Expected 108 real brawler icons; found $ICON_COUNT."; fi
           if [ "$MODEL_COUNT" -ne 5 ]; then echo "::warning::Expected 5 ONNX files; found $MODEL_COUNT."; fi
-          if [ "$MODEL_COUNT" -eq 5 ]; then
-            for model in "$MODEL_DIR"/*.onnx; do
-              test -s "$model" || { echo "::error::Empty ONNX file: $model"; exit 1; }
-              file "$model"
-            done
+          if [ "$MODEL_COUNT" -lt 1 ]; then
+            echo "::error::No ONNX detector was bundled. Refusing to publish an APK without the required model."
+            exit 1
           fi
+          while IFS= read -r model; do
+            test -s "$model" || { echo "::error::Empty ONNX file: $model"; exit 1; }
+            file "$model"
+          done < <(find "$MODEL_DIR" -type f -iname '*.onnx' -print)
+          DETECTOR_MANIFEST="$MODEL_DIR/brawler_detector/MODEL_MANIFEST.json"
+          test -s "$DETECTOR_MANIFEST"
+          grep -q '"cpu_zero_input_smoke_test": "PASS"' "$DETECTOR_MANIFEST"
+          grep -q 'AGPL-3.0' "$DETECTOR_MANIFEST"
           {
             echo "# RostikAI AI asset readiness"
             echo
@@ -179,7 +185,11 @@ jobs:
           test -s "$APK"
           unzip -tq "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | grep -q "package: name='com.rostik.ai'"
-          echo "APK package id verified: com.rostik.ai"
+          unzip -l "$APK" | grep -q 'assets/models/brawler_detector/brawler_detector_yolov8.onnx'
+          unzip -l "$APK" | grep -q 'assets/models/brawler_detector/yolov8_brawlstars_source.pt'
+          unzip -l "$APK" | grep -q 'assets/models/brawler_detector/LICENSE-AGPL-3.0-MODEL.txt'
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libonnxruntime.so'
+          echo "APK package, ONNX detector, source checkpoint, AGPL notice, and Android ONNX Runtime verified."
           echo "APK CREATED:"
           ls -lh "$APK"
           sha256sum "$APK" | tee android-native/app/build/outputs/apk/debug/SHA256.txt
