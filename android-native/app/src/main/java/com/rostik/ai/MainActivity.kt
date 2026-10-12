@@ -50,6 +50,7 @@ class MainActivity : Activity() {
         window.navigationBarColor = Color.rgb(13, 17, 29)
         loadQueue()
         buildUi()
+        loadBundledBrawlerCatalog()
         renderBrawlers("")
         renderQueue()
         refreshBrawlerCatalog()
@@ -278,6 +279,28 @@ class MainActivity : Activity() {
         if (list.childCount == 0) list.addView(label("Ничего не найдено", 13, Color.LTGRAY, false))
     }
 
+    private fun loadBundledBrawlerCatalog() {
+        try {
+            val json = assets.open("brawler_catalog.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val source = JSONObject(json).getJSONArray("list")
+            val local = mutableListOf<BrawlerEntry>()
+            for (i in 0 until source.length()) {
+                val item = source.getJSONObject(i)
+                val id = item.optInt("id", -1)
+                val name = item.optString("name").trim()
+                if (id > 0 && name.isNotBlank()) local.add(BrawlerEntry(id, name, "file:///android_asset/brawler_icons/$id.png"))
+            }
+            if (local.isNotEmpty()) {
+                brawlers.clear()
+                brawlers.addAll(local.distinctBy { it.id })
+                if (brawlers.none { it.name == selected }) selected = brawlers.first().name
+                android.util.Log.i("RostikCatalog", "Bundled offline roster loaded: ${brawlers.size}")
+            }
+        } catch (error: Exception) {
+            android.util.Log.w("RostikCatalog", "Bundled offline roster unavailable", error)
+        }
+    }
+
     private fun refreshBrawlerCatalog() {
         ioExecutor.execute {
             try {
@@ -293,7 +316,7 @@ class MainActivity : Activity() {
                     val item = source.getJSONObject(i)
                     val name = item.optString("name").trim()
                     val id = item.optInt("id", -1)
-                    val image = item.optString("imageUrl2").ifBlank { item.optString("imageUrl") }
+                    val image = "file:///android_asset/brawler_icons/$id.png"
                     if (name.isNotBlank() && id > 0) loaded.add(BrawlerEntry(id, name, image))
                 }
                 if (loaded.isEmpty()) throw IllegalStateException("Brawler catalog was empty")
@@ -315,6 +338,19 @@ class MainActivity : Activity() {
 
     private fun loadPortrait(url: String, target: ImageView) {
         imageCache[url]?.let { target.setImageBitmap(it); return }
+        if (url.startsWith("file:///android_asset/")) {
+            ioExecutor.execute {
+                try {
+                    val path = url.removePrefix("file:///android_asset/")
+                    val bitmap = assets.open(path).use { android.graphics.BitmapFactory.decodeStream(it) }
+                    if (bitmap != null) {
+                        imageCache[url] = bitmap
+                        mainHandler.post { if (target.tag == url) target.setImageBitmap(bitmap) }
+                    }
+                } catch (error: Exception) { android.util.Log.d("RostikCatalog", "Bundled portrait unavailable", error) }
+            }
+            return
+        }
         ioExecutor.execute {
             try {
                 val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
