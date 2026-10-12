@@ -18,6 +18,16 @@ import kotlin.math.sin
  */
 internal class GameAiPipeline {
     data class Point(val x: Float, val y: Float)
+    enum class CombatRole { CLOSE_RANGE, LONG_RANGE, UNKNOWN }
+
+    data class Threat(
+        val position: Point,
+        val confidence: Float,
+        val role: CombatRole = CombatRole.UNKNOWN,
+        // True only when a validated detector confirms that this threat is currently visible.
+        val visible: Boolean = true
+    )
+
     data class Observation(
         val frameWidth: Int,
         val frameHeight: Int,
@@ -26,12 +36,21 @@ internal class GameAiPipeline {
         val playerConfidence: Float,
         val threatConfidence: Float,
         // Null until a validated HUD-health decoder supplies a calibrated estimate [0..1].
-        val playerHealthFraction: Float? = null
+        val playerHealthFraction: Float? = null,
+        // Optional evidence from a future trained scene detector; absent means unknown, not false.
+        val visibleThreats: List<Threat> = emptyList(),
+        val nearestBush: Point? = null,
+        val safeZoneCenter: Point? = null,
+        val safeZoneRadius: Float? = null,
+        val smokeBoundaryPoint: Point? = null,
+        val ownRole: CombatRole = CombatRole.UNKNOWN,
+        val ammoFraction: Float? = null,
+        val hasLineOfSight: Boolean? = null
     )
     sealed interface Action {
-        data class Move(val dx: Float, val dy: Float, val durationMs: Long = 280L) : Action
-        data class Retreat(val dx: Float, val dy: Float, val durationMs: Long = 320L) : Action
-        data object Attack : Action
+        data class Move(val dx: Float, val dy: Float, val durationMs: Long = 280L, val reason: String = "reposition") : Action
+        data class Retreat(val dx: Float, val dy: Float, val durationMs: Long = 320L, val reason: String = "disengage") : Action
+        data class Attack(val target: Point, val reason: String = "engage") : Action
         data object NoOp : Action
     }
 
@@ -80,34 +99,133 @@ internal class GameAiPipeline {
         return Observation(w, h, player, threat, playerConfidence, threatConfidence)
     }
 
+    /**
+     * Conservative tactical policy scaffold. It only consumes explicit detector outputs;
+     * the current color-only analyze() method does not produce reliable health, bushes,
+     * range classes, safe-zone geometry, ammo or line-of-sight values.
+     */
     fun decide(observation: Observation): Action {
         val player = observation.player ?: return Action.NoOp
-        val enemy = observation.nearestThreat ?: return Action.NoOp
-        // Do not drive the screen from weak color evidence.
-        if (observation.playerConfidence < 0.18f || observation.threatConfidence < 0.12f) return Action.NoOp
-        val dx = enemy.x - player.x
-        val dy = enemy.y - player.y
-        val distance = kotlin.math.sqrt(dx * dx + dy * dy)
-        val norm = distance.coerceAtLeast(0.0001f)
+        if (observation.playerConfidence < MIN_PLAYER_CONFIDENCE) return Action.NoOp
 
-        // Tactical rule is intentionally gated on real health input. The current color-only
-        // analyzer never sets playerHealthFraction, so it cannot pretend to know HP or retreat.
         val health = observation.playerHealthFraction
-        if (health != null && health.isFinite() && health <= LOW_HEALTH_RETREAT_THRESHOLD) {
-            return Action.Retreat(
-                dx = (-dx / norm).coerceIn(-1f, 1f),
-                dy = (-dy / norm).coerceIn(-1f, 1f)
+        val safeRadius = observation.safeZoneRadius?.takeIf { it.isFinite() && it > 0f }
+        val safeCenter = observation.safeZoneCenter
+
+        // Avoid the poison gas / storm only when a detector provides a boundary point.
+        // Move inward toward a known safe-zone center when available; otherwise move away
+        // from the observed boundary point. No fabricated smoke estimate is used.
+        val smokePoint = observation.smokeBoundaryPoint
+        if (smokePoint != null && (health == null || health > CRITICAL_HEALTH_THRESHOLD)) {
+            val target = safeCenter ?: Point(
+                (player.x + (player.x - smokePoint.x)).coerceIn(0.02f, 0.98f),
+                (player.y + (player.y - smokePoint.y)).coerceIn(0.02f, 0.98f)
             )
+            return movementToward(player, target, "escape_storm", 360L)
         }
 
-        // No attack action based on distance alone: close screen centroids are not proof of
-        // a valid target, aim direction, line of sight, ammo, or attack range.
-        if (distance < 0.015f) return Action.NoOp
-        return Action.Move((dx / norm).coerceIn(-1f, 1f), (dy / norm).coerceIn(-1f, 1f))
+        // Low health: disengage toward cover (bush) when its location is actually detected,
+        // otherwise move away from the nearest confirmed visible threat.
+        if (health != null && health.isFinite() && health <= LOW_HEALTH_RETREAT_THRESHOLD) {
+            val bush = observation.nearestBush
+            if (bush != null) return movementToward(player, bush, "low_hp_seek_cover", 360L)
+            val enemy = bestVisibleThreat(observation)
+            if (enemy != null) return movementAway(player, enemy.position, "low_hp_retreat", 360L)
+            return Action.NoOp
+        }
+
+        val enemy = bestVisibleThreat(observation)
+        if (enemy == null) {
+            // No confirmed enemy: use a detected bush as cover; otherwise stay still rather
+            // than wandering toward unobserved hazards. A future map/path planner can patrol.
+            val bush = observation.nearestBush
+            if (bush != null) return movementToward(player, bush, "no_enemy_seek_cover", 320L)
+            if (safeCenter != null && safeRadius != null && distance(player, safeCenter) > safeRadius * 0.70f) {
+                return movementToward(player, safeCenter, "stay_inside_safe_zone", 320L)
+            }
+            return Action.NoOp
+        }
+
+        val enemyDistance = distance(player, enemy.position)
+        val targetRole = enemy.role
+        val ownRole = observation.ownRole
+        val ammo = observation.ammoFraction
+
+        // If we are long range, keep distance and only attack a confirmed target when
+        // line-of-sight and ammunition are known to be sufficient.
+        if (ownRole == CombatRole.LONG_RANGE) {
+            if (enemyDistance < LONG_RANGE_KEEP_DISTANCE) {
+                return movementAway(player, enemy.position, "long_range_keep_distance", 300L)
+            }
+            if (observation.hasLineOfSight == true && (ammo == null || ammo > 0.05f)) {
+                return Action.Attack(enemy.position, "long_range_shot")
+            }
+            return Action.NoOp
+        }
+
+        // Against a long-range enemy, a close-range fighter should approach only if healthy,
+        // preferably via detected cover; avoid blindly crossing open space.
+        if (ownRole == CombatRole.CLOSE_RANGE && targetRole == CombatRole.LONG_RANGE) {
+            if (health != null && health < APPROACH_HEALTH_THRESHOLD) {
+                return movementAway(player, enemy.position, "too_weak_to_approach_ranged_enemy", 320L)
+            }
+            val bush = observation.nearestBush
+            if (bush != null && enemyDistance > CLOSE_RANGE_ENGAGE_DISTANCE) {
+                return movementToward(player, bush, "flank_through_cover", 320L)
+            }
+            if (enemyDistance > CLOSE_RANGE_ENGAGE_DISTANCE) {
+                // Approach in short bounded bursts; do not attack until within the close-range
+                // threshold and only if line-of-sight is confirmed.
+                return movementToward(player, enemy.position, "close_distance_on_ranged_enemy", 220L)
+            }
+        }
+
+        if (ownRole == CombatRole.CLOSE_RANGE && enemyDistance > CLOSE_RANGE_ENGAGE_DISTANCE) {
+            return movementToward(player, enemy.position, "close_range_approach", 220L)
+        }
+
+        if (observation.hasLineOfSight == true && (ammo == null || ammo > 0.05f)) {
+            return Action.Attack(enemy.position, "confirmed_target_in_range")
+        }
+        return Action.NoOp
+    }
+
+    private fun bestVisibleThreat(observation: Observation): Threat? =
+        observation.visibleThreats
+            .asSequence()
+            .filter { it.visible && it.confidence >= MIN_THREAT_CONFIDENCE }
+            .minByOrNull { threat -> observation.player?.let { distance(it, threat.position) } ?: Float.MAX_VALUE }
+            ?: observation.nearestThreat?.takeIf { observation.threatConfidence >= MIN_THREAT_CONFIDENCE }
+                ?.let { Threat(it, observation.threatConfidence) }
+
+    private fun distance(a: Point, b: Point): Float {
+        val dx = b.x - a.x
+        val dy = b.y - a.y
+        return kotlin.math.sqrt(dx * dx + dy * dy)
+    }
+
+    private fun movementToward(from: Point, to: Point, reason: String, duration: Long): Action {
+        val dx = to.x - from.x
+        val dy = to.y - from.y
+        val norm = kotlin.math.sqrt(dx * dx + dy * dy).coerceAtLeast(0.0001f)
+        return Action.Move((dx / norm).coerceIn(-1f, 1f), (dy / norm).coerceIn(-1f, 1f), duration, reason)
+    }
+
+    private fun movementAway(from: Point, danger: Point, reason: String, duration: Long): Action {
+        val dx = from.x - danger.x
+        val dy = from.y - danger.y
+        val norm = kotlin.math.sqrt(dx * dx + dy * dy).coerceAtLeast(0.0001f)
+        return Action.Retreat((dx / norm).coerceIn(-1f, 1f), (dy / norm).coerceIn(-1f, 1f), duration, reason)
     }
 
     companion object {
+        private const val MIN_PLAYER_CONFIDENCE = 0.18f
+        private const val MIN_THREAT_CONFIDENCE = 0.12f
         private const val LOW_HEALTH_RETREAT_THRESHOLD = 0.30f
+        private const val CRITICAL_HEALTH_THRESHOLD = 0.15f
+        private const val APPROACH_HEALTH_THRESHOLD = 0.45f
+        private const val LONG_RANGE_KEEP_DISTANCE = 0.20f
+        private const val CLOSE_RANGE_ENGAGE_DISTANCE = 0.12f
         private const val TAG = "RostikGameAI"
     }
 }
