@@ -89,7 +89,7 @@ jobs:
               try:
                   bid = int(item["id"])
                   name = str(item["name"]).strip()
-                  urls = list(dict.fromkeys(u for u in (item.get("imageUrl2"), item.get("imageUrl")) if u))
+                  urls = list(dict.fromkeys(u for u in (item.get("imageUrl2"), item.get("imageUrl"), item.get("imageUrl3")) if u))
                   if not name or not urls:
                       raise ValueError("missing name/image URL")
                   image_data = None
