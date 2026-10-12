@@ -9,7 +9,7 @@ The native Android project is in `android-native/`.
 3. Run the workflow on the default branch.
 4. Download the `RostikAI-native-debug-apk` artifact after a successful run and extract `app-debug.apk`.
 
-The build uses JDK 17, Android SDK 35/build-tools 35.0.0, and Gradle 8.10.2. It downloads and converts one pinned YOLOv8 model during CI, checks its license and source hash, runs ONNX graph and CPU inference smoke tests, builds the APK, and verifies that the APK contains the model, original checkpoint, license text, and ONNX Runtime Android native library. The phone does not need Python, PyTorch, or a separate model download.
+See [INSTALL.md](INSTALL.md) for the exact download/install steps and required Android permission prompts.\n\nThe build uses JDK 17, Android SDK 35/build-tools 35.0.0, and Gradle 8.10.2. It downloads and converts one pinned YOLOv8 model during CI, checks its license and source hash, runs ONNX graph and CPU inference smoke tests, builds the APK, and verifies that the APK contains the model, original checkpoint, license text, and ONNX Runtime Android native library. The phone does not need Python, PyTorch, or a separate model download.
 
 ## What is implemented
 
