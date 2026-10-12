@@ -26,6 +26,7 @@ Scope: `android-native/` and the current feature branch. This is a source/build 
 ## Safe improvements already made on this branch
 
 - Added an experimental perception/policy seam for future detector integration.
+- Added explicit five-role ONNX inventory and per-role status reporting; graph-load success is clearly marked as unvalidated, and gameplay readiness stays false until model-specific validation is implemented.
 - Connected it to capture for diagnostics only.
 - Moved frame analysis off the main looper to reduce UI-freeze risk.
 - Kept automatic gestures disabled until perception and policy are verified.
