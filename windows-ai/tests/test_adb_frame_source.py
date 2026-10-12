@@ -15,7 +15,7 @@ class AdbFrameSourceTests(unittest.TestCase):
         self.assertTrue(result.startswith(PNG_SIGNATURE))
         command = run.call_args.args[0]
         self.assertEqual(command[:3], ["adb", "-s", "emulator-5554"])
-        self.assertEqual(command[-3:], ["screencap", "-p"][-3:])
+        self.assertEqual(command[-3:], ["exec-out", "screencap", "-p"])
 
     @patch("adb_frame_source.subprocess.run")
     def test_rejects_nonzero_adb_exit(self, run):
