@@ -56,6 +56,9 @@ jobs:
           test -f android-native/app/build.gradle.kts
           test -f android-native/app/src/main/AndroidManifest.xml
           test -f android-native/app/src/main/java/com/rostik/ai/MainActivity.kt
+          test -f android-native/app/src/main/java/com/rostik/ai/OverlayService.kt
+          grep -q 'android:name=".OverlayService"' android-native/app/src/main/AndroidManifest.xml
+          grep -q 'ACTION_START' android-native/app/src/main/java/com/rostik/ai/OverlayService.kt
           grep -q 'applicationId = "com.rostik.ai"' android-native/app/build.gradle.kts
           grep -q 'class MainActivity' android-native/app/src/main/java/com/rostik/ai/MainActivity.kt
           echo "Preflight passed."
@@ -74,6 +77,8 @@ jobs:
           APK="android-native/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
           unzip -tq "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | grep -q "package: name='com.rostik.ai'"
+          echo "APK package id verified: com.rostik.ai"
           echo "APK CREATED:"
           ls -lh "$APK"
           sha256sum "$APK" | tee android-native/app/build/outputs/apk/debug/SHA256.txt
