@@ -86,7 +86,23 @@ class MainActivity : Activity() {
             })
         }
         card.addView(search, LinearLayout.LayoutParams(-1, dp(46)).apply { topMargin = dp(10) })
-        val listScroll = ScrollView(this).apply { isFillViewport = false }
+        val listScroll = ScrollView(this).apply {
+            isFillViewport = false
+            isVerticalScrollBarEnabled = true
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            // The brawler list is inside the main page ScrollView. Keep vertical
+            // drag gestures with the inner list so the user can scroll brawlers
+            // instead of accidentally scrolling the entire page.
+            setOnTouchListener { view, event ->
+                when (event.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN,
+                    android.view.MotionEvent.ACTION_MOVE -> view.parent?.requestDisallowInterceptTouchEvent(true)
+                    android.view.MotionEvent.ACTION_UP,
+                    android.view.MotionEvent.ACTION_CANCEL -> view.parent?.requestDisallowInterceptTouchEvent(false)
+                }
+                false
+            }
+        }
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         listScroll.addView(list)
         card.addView(listScroll, LinearLayout.LayoutParams(-1, dp(190)).apply { topMargin = dp(8) })
