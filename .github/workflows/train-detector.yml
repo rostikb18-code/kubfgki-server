@@ -1,0 +1,124 @@
+name: RostikAI detector training
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset_zip_url:
+        description: "HTTPS URL to a ZIP containing a YOLO dataset and data.yaml (use a dataset you are licensed to use)"
+        required: true
+        type: string
+      model:
+        description: "Ultralytics starting checkpoint"
+        required: true
+        default: "yolo11n.pt"
+        type: string
+      epochs:
+        description: "Training epochs (CPU runner; start small for a smoke test)"
+        required: true
+        default: "10"
+        type: string
+      image_size:
+        description: "Training image size"
+        required: true
+        default: "640"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  train:
+    name: Train and evaluate YOLO detector
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: ml-training/requirements.txt
+
+      - name: Install training dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ml-training/requirements.txt
+
+      - name: Download and safely unpack dataset
+        env:
+          DATASET_ZIP_URL: ${{ inputs.dataset_zip_url }}
+        run: |
+          python - <<'PY'
+          import os, urllib.request, zipfile
+          from pathlib import Path
+          from urllib.parse import urlparse
+
+          url = os.environ["DATASET_ZIP_URL"].strip()
+          parsed = urlparse(url)
+          if parsed.scheme != "https" or not parsed.netloc:
+              raise SystemExit("Dataset URL must be HTTPS.")
+          archive = Path("dataset.zip")
+          request = urllib.request.Request(url, headers={"User-Agent": "RostikAI-dataset-training/1.0"})
+          with urllib.request.urlopen(request, timeout=90) as response, archive.open("wb") as out:
+              total = 0
+              while True:
+                  chunk = response.read(1024 * 1024)
+                  if not chunk:
+                      break
+                  total += len(chunk)
+                  if total > 8 * 1024 * 1024 * 1024:
+                      raise SystemExit("Dataset archive exceeds the 8 GiB safety limit.")
+                  out.write(chunk)
+          root = Path("dataset").resolve()
+          root.mkdir(parents=True, exist_ok=True)
+          with zipfile.ZipFile(archive) as zf:
+              for info in zf.infolist():
+                  target = (root / info.filename).resolve()
+                  if target != root and root not in target.parents:
+                      raise SystemExit(f"Unsafe ZIP path: {info.filename}")
+              zf.extractall(root)
+          yaml_files = list(root.rglob("data.yaml")) + list(root.rglob("data.yml"))
+          if len(yaml_files) != 1:
+              raise SystemExit(f"Expected exactly one data.yaml/data.yml in archive; found {len(yaml_files)}")
+          chosen = yaml_files[0]
+          print(f"Dataset YAML: {chosen}")
+          Path("dataset_yaml_path.txt").write_text(str(chosen.resolve()), encoding="utf-8")
+          PY
+
+      - name: Audit dataset
+        run: |
+          DATA_YAML="$(cat dataset_yaml_path.txt)"
+          python ml-training/audit_yolo_dataset.py --data "$DATA_YAML"
+
+      - name: Train, evaluate and export ONNX
+        env:
+          MODEL: ${{ inputs.model }}
+          EPOCHS: ${{ inputs.epochs }}
+          IMAGE_SIZE: ${{ inputs.image_size }}
+        run: |
+          set -euo pipefail
+          [[ "$EPOCHS" =~ ^[1-9][0-9]{0,2}$ ]] || { echo "epochs must be 1..999"; exit 2; }
+          [[ "$IMAGE_SIZE" =~ ^[0-9]{2,4}$ ]] || { echo "image_size must be a positive integer"; exit 2; }
+          DATA_YAML="$(cat dataset_yaml_path.txt)"
+          python ml-training/train_detector.py \
+            --data "$DATA_YAML" \
+            --model "$MODEL" \
+            --epochs "$EPOCHS" \
+            --imgsz "$IMAGE_SIZE" \
+            --device cpu \
+            --project runs/rostikai \
+            --name brawlstars-detector
+
+      - name: Upload training report, weights and ONNX
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rostikai-detector-training
+          path: |
+            runs/rostikai/brawlstars-detector/
+            dataset_yaml_path.txt
+          if-no-files-found: warn
+          retention-days: 14
