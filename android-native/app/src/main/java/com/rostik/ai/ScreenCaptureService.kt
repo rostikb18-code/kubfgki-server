@@ -15,13 +15,14 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
+import android.os.HandlerThread
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
 
 /**
- * On-device MediaProjection capture foundation.
- * This service captures frames only; it does NOT recognize the game or control gameplay yet.
+ * MediaProjection capture with experimental color-cue diagnostics.
+ * Color cues are not verified game recognition; this service deliberately sends no gameplay gestures.
  */
 class ScreenCaptureService : Service() {
     companion object {
@@ -39,6 +40,10 @@ class ScreenCaptureService : Service() {
     private var imageReader: ImageReader? = null
     private var lastSampleAt = 0L
     private var sampledFrames = 0L
+    private var analysisThread: HandlerThread? = null
+    private val gameAiPipeline = GameAiPipeline()
+    private val gasDetector = GasDetector()
+    private var sceneDetector: SceneDetector? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -86,7 +91,7 @@ class ScreenCaptureService : Service() {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
         }.setContentTitle("RostikAI")
-            .setContentText("Захват экрана активен; игровой анализ ещё не подключён")
+            .setContentText("Захват экрана активен; распознавание бойцов не подтверждено")
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .setOngoing(true)
             .build()
@@ -114,26 +119,39 @@ class ScreenCaptureService : Service() {
         val width = metrics.widthPixels.coerceAtLeast(1)
         val height = metrics.heightPixels.coerceAtLeast(1)
         val density = metrics.densityDpi
+        sceneDetector = try { SceneDetector(this).also { Log.i(TAG, "Trained ONNX scene detector loaded in OBSERVE-ONLY mode") } }
+            catch (e: Exception) { Log.e(TAG, "Trained scene detector unavailable; observe-only color diagnostics remain", e); null }
         val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
         imageReader = reader
+        // Frame analysis is CPU work: keep it off the main looper to avoid freezing the UI.
+        val worker = HandlerThread("RostikAI-FrameAnalysis").also { it.start() }
+        analysisThread = worker
         reader.setOnImageAvailableListener({ source ->
             val frame = source.acquireLatestImage() ?: return@setOnImageAvailableListener
             try {
                 val now = android.os.SystemClock.elapsedRealtime()
-                if (now - lastSampleAt >= 1000L) {
+                if (now - lastSampleAt >= 500L) {
                     lastSampleAt = now
                     val sample = sampleHudRegions(frame)
+                    val observation = gameAiPipeline.analyze(frame)
+                    val proposal = gameAiPipeline.decide(observation)
+                    val gas = gasDetector.inspect(frame, observation.player)
+                    val detections = sceneDetector?.detect(frame).orEmpty()
                     sampledFrames++
-                    Log.i(TAG, "OBSERVE_ONLY frame=$sampledFrames size=${frame.width}x${frame.height} " +
+                    Log.i(TAG, "EXPERIMENTAL_VISION frame=$sampledFrames size=${frame.width}x${frame.height} " +
                         "left=${sample[0]} right=${sample[1]} centerRight=${sample[2]} " +
-                        "meaning=unclassified-no-automatic-actions")
+                        "greenCandidate=${observation.player} greenConfidence=${observation.playerConfidence} " +
+                        "redCandidate=${observation.nearestThreat} redConfidence=${observation.threatConfidence} " +
+                        "proposal=$proposal gasStatus=${gas.status} gasFraction=${gas.gasFraction} " +
+                        "gasSamples=${gas.sampledPixels} trainedDetections=${detections.take(8)} " +
+                        "execution=DISABLED_MODEL_NOT_GAMEPLAY_VALIDATED")
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Frame sampling failed; no actions sent", e)
             } finally {
                 frame.close()
             }
-        }, android.os.Handler(mainLooper))
+        }, android.os.Handler(worker.looper))
         virtualDisplay = projection?.createVirtualDisplay(
             "RostikAI-Capture",
             width,
@@ -145,7 +163,7 @@ class ScreenCaptureService : Service() {
             null
         )
         if (virtualDisplay == null) throw IllegalStateException("VirtualDisplay creation failed")
-        Log.i(TAG, "Screen capture started: ${width}x${height}; no game-state inference is connected")
+        Log.i(TAG, "Screen capture started: ${width}x${height}; experimental color diagnostics only; actions disabled")
     }
 
 
@@ -202,8 +220,12 @@ class ScreenCaptureService : Service() {
         try { imageReader?.setOnImageAvailableListener(null, null) } catch (_: Exception) {}
         try { imageReader?.close() } catch (_: Exception) {}
         imageReader = null
+        try { analysisThread?.quitSafely() } catch (_: Exception) {}
+        analysisThread = null
         try { projection?.stop() } catch (_: Exception) {}
         projection = null
+        try { sceneDetector?.close() } catch (_: Exception) {}
+        sceneDetector = null
     }
 
     override fun onDestroy() {

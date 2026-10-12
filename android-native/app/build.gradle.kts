@@ -9,7 +9,7 @@ android {
 
     defaultConfig {
         applicationId = "com.rostik.ai"
-        minSdk = 26
+        minSdk = 24
         targetSdk = 35
         versionCode = 2
         versionName = "1.1.0"
@@ -26,6 +26,8 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+
     // Real Android inference runtime. This is an engine, not a trained Brawl Stars model.
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.24.3")
 }
