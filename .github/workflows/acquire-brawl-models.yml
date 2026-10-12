@@ -34,6 +34,40 @@ jobs:
           file best.pt hp_crnn_best.pt | tee ../report/file-types.txt
           stat -c '%n %s bytes' best.pt hp_crnn_best.pt | tee ../report/file-sizes.txt
 
+      - name: Inspect upstream HP OCR architecture source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p model-audit/source model-audit/report
+          url="https://huggingface.co/datasets/BlackPymer2/BrawlStars-gameplay/resolve/main/train_hp.py"
+          if curl --fail --location --retry 2 --retry-delay 2 "$url" --output model-audit/source/train_hp.py; then
+            if grep -Eq 'class[[:space:]]+CRNN|def[[:space:]]+preprocess|def[[:space:]]+decode' model-audit/source/train_hp.py; then
+              {
+                echo "# HP OCR architecture source audit"
+                echo
+                echo "- Source URL: $url"
+                echo "- Download: successful"
+                echo "- CRNN/preprocess/decode symbols: detected"
+                echo "- SHA-256:"
+                sha256sum model-audit/source/train_hp.py
+                echo
+                echo "This source is a candidate for matching the checkpoint. Its architecture, checkpoint keys, preprocessing dimensions and decoder must still be verified before ONNX export."
+              } > model-audit/report/hp-source-audit.md
+            else
+              echo "Downloaded train_hp.py but expected CRNN/preprocess/decode symbols were not found." > model-audit/report/hp-source-audit.md
+            fi
+          else
+            rm -f model-audit/source/train_hp.py
+            {
+              echo "# HP OCR architecture source audit"
+              echo
+              echo "- Source URL: $url"
+              echo "- Download: unavailable at this URL in this workflow run"
+              echo "- No ONNX export attempted: architecture source was not retrieved."
+            } > model-audit/report/hp-source-audit.md
+          fi
+          cat model-audit/report/hp-source-audit.md
+
       - name: Export detector checkpoint to ONNX and validate graph
         shell: bash
         run: |
