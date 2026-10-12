@@ -65,6 +65,12 @@ Use `--device cpu` if no CUDA GPU is available; training will be slower. The scr
 
 Before deployment, inspect precision, recall, mAP50 and mAP50-95 overall and per class, test on entirely unseen matches/maps, compare ONNX predictions with the source model, measure latency on the target phone, and create a model card with provenance, preprocessing, labels, output tensor contract and SHA-256. A successful export is not proof of useful detections.
 
+### CI contract and executable-graph smoke test
+
+The model acquisition workflow runs `validate_detector_onnx.py` after export. It checks the ONNX graph, enforces the current Android detector contract (`float32 [1,3,640,640]` input and `float32 [1,12,8400]` output), executes one synthetic input with ONNX Runtime's CPU provider, verifies the runtime output shape and rejects NaN/Inf values. A JSON report with the model SHA-256 is uploaded as part of the model audit artifact.
+
+This is deliberately labelled a **graph/runtime smoke test**, not a quality or Android-device test. Synthetic zeros cannot establish that the detector recognises gameplay. The next gate remains a labelled held-out set and an Android-device inference test before any action execution can be considered.
+
 ## Scope and limits
 
 - A detector learns only the labels supplied. If the dataset lacks health, ammo, bushes, gas or safe-zone annotations, it cannot learn them from bounding boxes for unrelated classes.
