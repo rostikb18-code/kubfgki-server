@@ -1,0 +1,44 @@
+name: RostikAI — strict five-model audit
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "android-native/app/src/main/assets/models/**"
+      - "android-native/scripts/audit_onnx_models.py"
+      - ".github/workflows/audit-onnx-models.yml"
+  pull_request:
+    paths:
+      - "android-native/app/src/main/assets/models/**"
+      - "android-native/scripts/audit_onnx_models.py"
+      - ".github/workflows/audit-onnx-models.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-five-models:
+    name: Validate five real ONNX models on CPU
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install ONNX Runtime and NumPy
+        run: python -m pip install --disable-pip-version-check numpy onnxruntime
+
+      - name: Require exactly five loadable models and run CPU smoke tests
+        run: python android-native/scripts/audit_onnx_models.py --require-five
+
+      - name: Explain validation scope
+        if: always()
+        run: |
+          echo "A passing zero-input smoke test proves only that each model loads and executes on CPU."
+          echo "It does not prove game recognition accuracy, label compatibility, preprocessing correctness, or gameplay."
