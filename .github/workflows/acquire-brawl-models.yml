@@ -39,7 +39,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install ultralytics onnx
+          python -m pip install ultralytics onnx onnxruntime numpy
           python - <<'PY'
           from pathlib import Path
           from ultralytics import YOLO
@@ -59,6 +59,9 @@ jobs:
           print("Outputs:", [(x.name, [d.dim_value or d.dim_param for d in x.type.tensor_type.shape.dim]) for x in graph.graph.output])
           print("Labels:", model.names)
           PY
+          python ml-training/validate_detector_onnx.py \
+            --model model-audit/onnx/scene_detector.onnx \
+            --report model-audit/report/scene-detector-runtime-smoke.json
           sha256sum model-audit/onnx/scene_detector.onnx | tee model-audit/report/onnx-sha256.txt
           stat -c '%n %s bytes' model-audit/onnx/scene_detector.onnx | tee model-audit/report/onnx-size.txt
 
