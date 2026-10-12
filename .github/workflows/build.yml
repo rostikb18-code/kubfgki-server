@@ -96,6 +96,27 @@ jobs:
           cmp -s overrides/OverlayService.kt "${OVERLAY_SOURCES[0]}"
           echo "CANONICAL OVERLAY SOURCE APPLIED: ${OVERLAY_SOURCES[0]}"
 
+          # Guard critical lifecycle behavior in the exact source that will compile.
+          python3 - overrides/OverlayService.kt <<'PY'
+          from pathlib import Path
+          import sys
+
+          source = Path(sys.argv[1]).read_text(encoding="utf-8")
+          checks = {
+              "STOP cancels delayed START": "pendingStartRunnable?.let(mainHandler::removeCallbacks)" in source,
+              "STOP clears delayed START reference": "pendingStartRunnable = null" in source,
+              "STOP terminates overlay service": "stopSelf()" in source,
+              "delayed START checks service/panel state": "if (panel == null || !expanded || BotRuntime.supervisor.isRunning()) return@Runnable" in source,
+              "delayed START is stored for cancellation": "pendingStartRunnable = startRunnable" in source,
+          }
+          failed = [name for name, ok in checks.items() if not ok]
+          for name, ok in checks.items():
+              print(("PASS: " if ok else "FAIL: ") + name)
+          if failed:
+              raise SystemExit("Lifecycle source verification failed: " + ", ".join(failed))
+          print("LIFECYCLE SOURCE CHECKS PASSED")
+          PY
+
           echo "PROJECT ASSEMBLY OK"
 
       # ============================================================
