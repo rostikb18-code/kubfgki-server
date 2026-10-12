@@ -42,6 +42,27 @@ def digest(path: Path) -> str:
     return h.hexdigest()
 
 
+def paired_label_path(image_path: Path, split_path: Path) -> Path:
+    """Resolve common YOLO layouts: train/images/x.jpg and images/train/x.jpg."""
+    parts = list(image_path.parts)
+    image_indexes = [i for i, part in enumerate(parts[:-1]) if part.lower() == "images"]
+    if image_indexes:
+        # Use the last 'images' directory in the path so parent dataset names are not changed.
+        index = image_indexes[-1]
+        parts[index] = "labels"
+        return Path(*parts).with_suffix(".txt")
+
+    # Layout where each split contains sibling images/ and labels/ directories.
+    try:
+        relative = image_path.relative_to(split_path)
+        if relative.parts and relative.parts[0].lower() == "images":
+            return split_path / "labels" / Path(*relative.parts[1:]).with_suffix(".txt")
+    except ValueError:
+        pass
+    # Fallback for split_path itself being the images directory.
+    return image_path.parent.parent / "labels" / (image_path.stem + ".txt")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", required=True, help="Path to dataset data.yaml")
@@ -125,7 +146,7 @@ def main() -> int:
                 warnings += 1
             else:
                 all_hashes[file_hash] = f"{split}:{image_path}"
-            label_path = image_path.parent.parent / "labels" / (image_path.stem + ".txt")
+            label_path = paired_label_path(image_path, split_path)
             if not label_path.is_file():
                 missing_labels += 1
                 continue
@@ -155,16 +176,12 @@ def main() -> int:
             errors += bad_labels
         split_images[split] = split_hashes
 
-    if "train" in split_images and "val" in split_images:
-        overlap = split_images["train"] & split_images["val"]
-        if overlap:
-            print(f"ERROR: {len(overlap)} exact duplicate image(s) overlap train and val")
-            errors += len(overlap)
-    if "test" in split_images and "train" in split_images:
-        overlap = split_images["train"] & split_images["test"]
-        if overlap:
-            print(f"ERROR: {len(overlap)} exact duplicate image(s) overlap train and test")
-            errors += len(overlap)
+    for left, right in (("train", "val"), ("train", "test"), ("val", "test")):
+        if left in split_images and right in split_images:
+            overlap = split_images[left] & split_images[right]
+            if overlap:
+                print(f"ERROR: {len(overlap)} exact duplicate image(s) overlap {left} and {right}")
+                errors += len(overlap)
     print(f"Audit result: {errors} error(s), {warnings} warning(s)")
     return 1 if errors else 0
 
