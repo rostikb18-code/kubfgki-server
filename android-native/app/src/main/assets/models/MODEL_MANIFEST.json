@@ -1,81 +1,50 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "RostikAI",
-  "status": "incomplete",
-  "policy": "Do not count a model as integrated until its real file, license/provenance, SHA-256, input/output tensors, labels, preprocessing, and CPU smoke test are recorded.",
+  "status": "partial_perception_pipeline_build_generated",
+  "policy": "The APK build exports and bundles one pinned upstream YOLOv8 detector and verifies its ONNX CPU smoke test. This is perception only, not an autonomous gameplay policy.",
   "models": [
     {
       "id": "brawler_detector",
-      "purpose": "Detect brawlers and other relevant entities in captured game frames",
-      "file": null,
-      "status": "candidate_not_bundled_license_unverified",
-      "license": "No explicit model redistribution license verified; do not bundle until permission is confirmed",
-      "source_url": "https://github.com/AngelFireLA/BrawlStarsBotMaking/blob/main/models/specific%20brawler%20detection/.onnx/PylaSpecificBrawlerDetectorV1.onnx",
-      "sha256": null,
-      "input_spec": null,
-      "output_spec": null,
-      "labels_file": null,
-      "source_repository": "AngelFireLA/BrawlStarsBotMaking",
-      "source_file_size_bytes": 13538791,
-      "source_git_blob_sha": "c32b5f2ba0cd890644511b84f040667a9c21a103",
-      "notes": "Upstream catalogue says this YOLOv8 model detects brawlers and game entities. Input/output tensors, labels/preprocessing, and Android inference remain to be verified."
-    },
-    {
-      "id": "hud_ocr",
-      "purpose": "Read supported HUD text and numeric values such as health or trophies where visible",
-      "file": null,
-      "status": "missing",
-      "license": null,
-      "source_url": null,
-      "sha256": null,
-      "input_spec": null,
-      "output_spec": null,
-      "labels_file": null
-    },
-    {
-      "id": "environment_detector",
-      "purpose": "Identify arena boundaries, obstacles, hazards, and gas where applicable",
-      "file": null,
-      "status": "candidate_not_bundled_license_unverified",
-      "license": "No explicit model redistribution license verified; do not bundle until permission is confirmed",
-      "source_url": "https://github.com/AngelFireLA/BrawlStarsBotMaking/blob/main/models/wall%20detection/.onnx/PylaWallDetectorV2.onnx",
-      "sha256": null,
-      "input_spec": null,
-      "output_spec": null,
-      "labels_file": null,
-      "source_repository": "AngelFireLA/BrawlStarsBotMaking",
-      "source_file_size_bytes": 10606102,
-      "source_git_blob_sha": "b83372c4ebabaac7afbbaaa03e9d2a359e10de63",
-      "notes": "Upstream catalogue says this YOLOv11 model detects walls, bushes, and close bushes. Input/output tensors, labels/preprocessing, and Android inference remain to be verified."
-    },
-    {
-      "id": "tactical_state",
-      "purpose": "Estimate gameplay state and relevant tactical features from validated perception outputs",
-      "file": null,
-      "status": "candidate_not_bundled_license_unverified",
-      "license": "No explicit model redistribution license verified; do not bundle until permission is confirmed",
-      "source_url": "https://github.com/AngelFireLA/BrawlStarsBotMaking/blob/main/models/entity%20detection/.onnx/PylaEntityDetectorV2.onnx",
-      "sha256": null,
-      "input_spec": null,
-      "output_spec": null,
-      "labels_file": null,
-      "source_repository": "AngelFireLA/BrawlStarsBotMaking",
-      "source_file_size_bytes": 10585057,
-      "source_git_blob_sha": "7f9bd34c6532850c8256d2125b1f7cf74c145c89",
-      "notes": "This is an entity detector (enemy/player/teammate), not a tactical-state or action-policy model. It cannot be treated as an action policy; listed here as a perception candidate only."
+      "purpose": "Detect Player, Bush, Enemy, and Cubebox objects in captured game frames",
+      "file": "models/brawler_detector/brawler_detector_yolov8.onnx",
+      "status": "generated_during_android_ci_from_pinned_source_checkpoint",
+      "license": "AGPL-3.0 as declared in upstream OpenVINO metadata; the APK includes the source checkpoint and license text",
+      "source_repository": "https://github.com/Jooi025/BrawlStarsBot",
+      "source_commit": "a5a797b28f1aa662db8364515bfd8342e66557a6",
+      "source_model_git_blob_sha1": "63260ffc402386ecc9e23affa1f05e6e27ca3705",
+      "input_spec": {
+        "shape": [1, 3, 384, 640],
+        "type": "float32",
+        "layout": "NCHW",
+        "color": "RGB",
+        "normalization": "0..1",
+        "resize": "letterbox"
+      },
+      "labels": ["Player", "Bush", "Enemy", "Cubebox"],
+      "thresholds": [0.37, 0.47, 0.57, 0.65],
+      "runtime": "ONNX Runtime Android, bundled in the APK",
+      "smoke_test": "Build workflow exports the model, checks ONNX graph, and runs CPU zero-input inference before packaging"
     },
     {
       "id": "action_policy",
-      "purpose": "Choose safe, bounded movement and attack intents from validated state inputs",
+      "purpose": "Choose movement and attack actions from validated game state",
       "file": null,
       "status": "missing",
       "license": null,
-      "source_url": null,
-      "sha256": null,
-      "input_spec": null,
-      "output_spec": null,
-      "labels_file": null
+      "notes": "No trained action policy is integrated. Automated gestures remain disabled."
+    },
+    {
+      "id": "hud_ocr",
+      "purpose": "Read health, timer, match phase, and other HUD values",
+      "file": null,
+      "status": "missing",
+      "license": null
     }
   ],
-  "audit_note": "Three upstream ONNX candidates have been identified by exact source path, size, and Git blob SHA. They are NOT copied into this repository or counted as integrated: the source repository does not provide a verified redistribution license for these model files, and model IO/preprocessing still need inspection. HUD OCR and action policy remain missing; a vision model is not a gameplay policy."
+  "limitations": [
+    "Model accuracy on current game versions, skins, phone resolutions, and portrait/landscape captures has not been validated.",
+    "A successful zero-input smoke test proves runtime compatibility, not detection quality.",
+    "The bot does not yet automatically choose and execute gameplay actions."
+  ]
 }
