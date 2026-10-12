@@ -414,14 +414,13 @@ class OverlayService : Service() {
             setPadding(dp(8), 0, 0, 0)
         }
 
-        // Trophy editor is FIRST: on phone-sized overlays the right column is
-        // a scroll viewport, so placing the editor after the queue hid the fields.
-        // Keep queue and size controls below it; they remain vertically scrollable.
-        right.addView(buildEditorCard(), LinearLayout.LayoutParams(-1, dp(250)))
-        right.addView(buildQueueCard(), LinearLayout.LayoutParams(-1, dp(160)).apply {
-            setMargins(0, dp(8), 0, 0)
-        })
-        right.addView(buildSizeCard(), LinearLayout.LayoutParams(-1, dp(150)).apply {
+        // Requested order: queue first, trophy editor directly underneath,
+        // then size controls. All three cards live in one vertical scroll area.
+        right.addView(buildQueueCard(), LinearLayout.LayoutParams(-1, dp(170)))
+        right.addView(buildEditorCard(), LinearLayout.LayoutParams(
+            -1, dp(if (editorField != null) 390 else 205)
+        ).apply { setMargins(0, dp(8), 0, 0) })
+        right.addView(buildSizeCard(), LinearLayout.LayoutParams(-1, dp(190)).apply {
             setMargins(0, dp(8), 0, 0)
         })
 
@@ -967,6 +966,11 @@ class OverlayService : Service() {
             setTextColor(Color.WHITE)
             setTypeface(null, Typeface.BOLD)
         }, LinearLayout.LayoutParams(-1, dp(25)))
+        card.addView(TextView(this).apply {
+            text = "Перетаскивай ползунок или нажимай − / +"
+            textSize = 9f
+            setTextColor(Color.rgb(125, 194, 224))
+        }, LinearLayout.LayoutParams(-1, dp(18)))
         card.addView(sizeSlider("ШИРИНА", widthPct, 55, 96) {
             widthPct = it
             saveSize()
