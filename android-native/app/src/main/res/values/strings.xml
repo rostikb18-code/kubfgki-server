@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="rostikai_accessibility_description">Позволяет RostikAI выполнять жесты на экране после ручного включения службы в системных настройках специальных возможностей.</string>
+</resources>
