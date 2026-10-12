@@ -125,7 +125,7 @@ class MainActivity : Activity() {
         content.addView(space(12))
         val controlCard = panel()
         controlCard.addView(label("УПРАВЛЕНИЕ", 15, Color.WHITE, true))
-        status = label("Состояние: готов к настройке", 13, Color.rgb(255, 205, 95), false)
+        status = label("Готов: модель встроена в APK; автодействия пока отключены", 13, Color.rgb(255, 205, 95), false)
         controlCard.addView(status)
         controlCard.addView(actionButton("ПРОВЕРИТЬ ONNX-МОДЕЛИ", Color.rgb(98, 78, 153)) {
             status.text = "Проверяю реальные .onnx-файлы на устройстве…"
@@ -140,11 +140,11 @@ class MainActivity : Activity() {
                 }
                 mainHandler.post {
                     status.text = if (result.isEmpty()) {
-                        "ИИ: 0 моделей найдено. Файлы .onnx ещё не добавлены; автоматическая игра не работает."
+                        "Модель не найдена или не открылась. Проверь APK и системный журнал; автодействия отключены."
                     } else {
                         "ONNX: ${result.size} модель(и) открыто. " + result.joinToString(" | ") {
                             "${it.assetPath.substringAfterLast('/')} входы=${it.inputs.size}, выходы=${it.outputs.size}"
-                        } + ". Точность и игровой цикл этим не подтверждены."
+                        } + ". Модель открылась; точность на матче не подтверждена, автодействия отключены."
                     }
                 }
             }
@@ -200,7 +200,7 @@ class MainActivity : Activity() {
         buttons.addView(actionButton("PAUSE", Color.rgb(73, 103, 168)) {
             stopService(Intent(this, ScreenCaptureService::class.java))
             startService(Intent(this, OverlayService::class.java).setAction(OverlayService.ACTION_PAUSE))
-            status.text = "Пауза: захват экрана остановлен, кнопка скрыта; игровой ИИ ещё не подключён"
+            status.text = "Пауза: захват экрана остановлен, кнопка AI скрыта."
         }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(4); rightMargin = dp(4); topMargin = dp(10) })
         buttons.addView(actionButton("STOP", Color.rgb(191, 69, 82)) {
             stopService(Intent(this, ScreenCaptureService::class.java))
@@ -208,7 +208,7 @@ class MainActivity : Activity() {
             status.text = "Состояние: захват экрана и кнопка AI остановлены"
         }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(4); topMargin = dp(10) })
         controlCard.addView(buttons)
-        controlCard.addView(label("Кнопка-пузырь и её размер работают. Автономное распознавание и управление матчем ещё не подключены.", 12, Color.rgb(174,184,205), false))
+        controlCard.addView(label("Детектор анализирует кадры в режиме наблюдения. Автоматические игровые действия пока отключены.", 12, Color.rgb(174,184,205), false))
         content.addView(controlCard)
         setContentView(root)
     }
@@ -235,8 +235,8 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(captureIntent)
         else startService(captureIntent)
         startOverlay()
-        status.text = "Захват экрана запущен; анализ матча и управление ещё не подключены"
-        Toast.makeText(this, "Захват экрана активен. Автономная игра пока не реализована.", Toast.LENGTH_LONG).show()
+        status.text = "Захват экрана запущен; детектор анализирует кадры, игровые действия отключены."
+        Toast.makeText(this, "Захват экрана активен: модель анализирует кадры. Автоматическое управление пока отключено.", Toast.LENGTH_LONG).show()
     }
 
     private fun startOverlay() {
