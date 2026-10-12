@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.py[cod]
+captures/
+recordings/
+models/
+.env
