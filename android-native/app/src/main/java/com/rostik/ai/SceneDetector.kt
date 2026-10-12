@@ -37,6 +37,13 @@ internal class SceneDetector(context: Context) : AutoCloseable {
         require(shape.shape.contentEquals(longArrayOf(1, 3, SIZE.toLong(), SIZE.toLong()))) {
             "Unexpected scene detector input shape: ${shape.shape.contentToString()}"
         }
+        val output = session.outputInfo.values.firstOrNull()
+            ?: throw IllegalStateException("Scene detector has no output")
+        val outputShape = output.info as? ai.onnxruntime.TensorInfo
+            ?: throw IllegalStateException("Scene detector output is not a tensor")
+        require(outputShape.shape.contentEquals(longArrayOf(1, 12, 8400))) {
+            "Unexpected scene detector output shape: ${outputShape.shape.contentToString()}"
+        }
     }
 
     @Synchronized
@@ -98,12 +105,33 @@ internal class SceneDetector(context: Context) : AutoCloseable {
                     val h = (bh / divisor) / (scaledH / SIZE.toFloat())
                     detections += Detection(names[bestClass], bestScore, left + w / 2f, top + h / 2f, w, h)
                 }
-                return detections.sortedByDescending { it.score }.take(maxResults)
+                // Greedy non-maximum suppression prevents the same object being reported
+                // many times by adjacent YOLO grid cells. Coordinates are normalized to frame space.
+                val selected = ArrayList<Detection>()
+                for (candidate in detections.sortedByDescending { it.score }) {
+                    if (selected.none { it.label == candidate.label && intersectionOverUnion(it, candidate) > NMS_IOU_THRESHOLD }) {
+                        selected += candidate
+                        if (selected.size >= maxResults) break
+                    }
+                }
+                return selected
             }
         }
     }
 
+    private fun intersectionOverUnion(a: Detection, b: Detection): Float {
+        val left = max(a.cx - a.width / 2f, b.cx - b.width / 2f)
+        val top = max(a.cy - a.height / 2f, b.cy - b.height / 2f)
+        val right = min(a.cx + a.width / 2f, b.cx + b.width / 2f)
+        val bottom = min(a.cy + a.height / 2f, b.cy + b.height / 2f)
+        val intersection = max(0f, right - left) * max(0f, bottom - top)
+        val areaA = max(0f, a.width) * max(0f, a.height)
+        val areaB = max(0f, b.width) * max(0f, b.height)
+        val union = areaA + areaB - intersection
+        return if (union <= 0f) 0f else intersection / union
+    }
+
     override fun close() { session.close() }
 
-    companion object { private const val SIZE = 640 }
+    companion object { private const val SIZE = 640; private const val NMS_IOU_THRESHOLD = 0.45f }
 }
