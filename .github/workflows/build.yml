@@ -22,16 +22,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Android SDK 35
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: platform-tools
 
@@ -44,7 +44,7 @@ jobs:
           sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
 
       - name: Set up Gradle 8.10.2
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: "8.10.2"
 
@@ -129,8 +129,21 @@ jobs:
           fi
           echo "Brawler icon files found: $ICON_COUNT (target: 108)"
           echo "ONNX files found: $MODEL_COUNT (target: 5)"
-          if [ "$ICON_COUNT" -ne 108 ]; then echo "::warning::Expected 108 real brawler icons; found $ICON_COUNT."; fi
-          if [ "$MODEL_COUNT" -ne 5 ]; then echo "::warning::Expected 5 ONNX files; found $MODEL_COUNT."; fi
+          CATALOG="android-native/app/src/main/assets/brawler_catalog.json"
+          CATALOG_COUNT=0
+          if [ -s "$CATALOG" ]; then
+            CATALOG_COUNT=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1], encoding="utf-8")).get("list", [])))' "$CATALOG")
+          fi
+          echo "Catalog entries: $CATALOG_COUNT; portrait files: $ICON_COUNT; desired roster target: 108"
+          if [ "$ICON_COUNT" -ne "$CATALOG_COUNT" ]; then
+            echo "::warning::Portrait count ($ICON_COUNT) differs from catalog entries ($CATALOG_COUNT)."
+          fi
+          if [ "$CATALOG_COUNT" -lt 108 ]; then
+            echo "::warning::The upstream BrawlAPI catalog currently supplied only $CATALOG_COUNT entries; no placeholder brawler/icon will be fabricated."
+          fi
+          if [ "$MODEL_COUNT" -ne 5 ]; then
+            echo "::warning::Expected 5 real ONNX model files; found $MODEL_COUNT. No dummy model files are generated; detector training and validation are still required."
+          fi
           if [ "$MODEL_COUNT" -eq 5 ]; then
             for model in "$MODEL_DIR"/*.onnx; do
               test -s "$model" || { echo "::error::Empty ONNX file: $model"; exit 1; }
@@ -167,7 +180,7 @@ jobs:
           sha256sum "$APK" | tee android-native/app/build/outputs/apk/debug/SHA256.txt
 
       - name: Upload installable debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: RostikAI-native-debug-apk
           path: |
@@ -178,7 +191,7 @@ jobs:
 
       - name: Upload build logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: RostikAI-build-logs
           path: |
