@@ -1,6 +1,6 @@
 # RostikAI Native Android — clean project
 
-The old five-part ZIP assembly has been removed from the active build workflow. The Android project is under `android-native/`.
+The old five-part ZIP assembly has been removed from the active build workflow. The clean Android project lives under `android-native/`.
 
 ## Build an APK on GitHub
 
@@ -9,10 +9,25 @@ The old five-part ZIP assembly has been removed from the active build workflow. 
 3. Use **Run workflow** on the default branch, or wait for the push/pull-request build.
 4. After a successful run, download the `RostikAI-native-debug-apk` artifact and extract `app-debug.apk`.
 
-Build configuration: JDK 17, Android SDK 35/build-tools 35.0.0, Gradle 8.10.2. The workflow checks required project files, runs Gradle compilation, verifies that the APK is a non-empty valid ZIP, calculates SHA-256, and uploads the APK. It uploads logs if the build fails.
+Build configuration: JDK 17, Android SDK 35/build-tools 35.0.0, Gradle 8.10.2. CI checks the Android project structure, compiles the APK, checks ZIP integrity and package ID, calculates SHA-256, and uploads the APK. It also reports whether model/icon assets are actually present; missing AI assets are not silently represented as complete.
 
 ## Honest implementation status
 
-This is currently a **native Android UI foundation**, not a finished autonomous gameplay bot. The current screen has brawler text search/selection for a starter subset, trophy inputs, a queue saved on-device, separate width/height sliders, and a draggable floating AI bubble that requests overlay permission and can be started/paused/stopped. It does **not** yet include the full 108 icon assets, MediaProjection capture flow, Accessibility-based game control, ONNX Runtime, five verified trained models, live match perception, or autonomous match control. START intentionally reports that the gameplay controller is not connected.
+Implemented UI foundation:
+- Brawler text search/selection for a starter subset (not all 108).
+- Current/target trophy fields and persistent queue.
+- Independent width/height sliders for the floating AI button.
+- Draggable floating AI bubble with overlay permission and Start/Pause/Stop controls.
+- ONNX Runtime Android dependency is included, so the inference engine can be used by a future model runner.
 
-No APK should be considered built until GitHub Actions reports a successful run and provides the artifact. An Actions build verifies compilation and packaging, not gameplay on a physical phone; device installation and gameplay still require separate testing.
+Still missing and not to be claimed as working:
+- Complete set of 108 brawler portraits/icons.
+- Five genuine, provenance-documented, compatible trained ONNX models.
+- A model runner wired to validated model input/output tensors.
+- MediaProjection screen capture and match-state pipeline.
+- Verified game-state detector, safe action policy, and Accessibility/gesture control.
+- End-to-end autonomous match play and real-device validation.
+
+An ONNX Runtime dependency is **not** itself an AI model. Empty, fabricated, randomly generated, or incompatible model files must not be counted as models. The current START action only launches the floating bubble and explicitly says gameplay AI is not connected.
+
+No APK should be considered built until GitHub Actions reports success and provides the artifact. CI compilation/package checks do not prove runtime or gameplay works on a physical phone; that requires separate device testing.
