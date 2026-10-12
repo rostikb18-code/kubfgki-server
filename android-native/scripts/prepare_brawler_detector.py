@@ -49,7 +49,7 @@ def fetch(url: str, destination: pathlib.Path) -> bytes:
 
 
 def git_blob_sha(data: bytes) -> str:
-    header = f"blob {len(data)}\\0".encode("ascii")
+    header = b"blob " + str(len(data)).encode("ascii") + bytes((0,))
     return hashlib.sha1(header + data).hexdigest()
 
 
@@ -159,7 +159,7 @@ def main() -> int:
         ]
     }
     (ASSET_DIR / "MODEL_MANIFEST.json").write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False) + "\\n", encoding="utf-8"
+        json.dumps(manifest, indent=2, ensure_ascii=False) + chr(10), encoding="utf-8"
     )
     print(json.dumps({
         "onnx": str(onnx_path),
