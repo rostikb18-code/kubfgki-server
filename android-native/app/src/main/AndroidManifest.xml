@@ -5,6 +5,7 @@
         android:label="RostikAI"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:usesCleartextTraffic="false">
+        <service android:name=".OverlayService" android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
