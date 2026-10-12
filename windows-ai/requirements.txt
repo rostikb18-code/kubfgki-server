@@ -1,0 +1,2 @@
+# The core and its tests use only the Python standard library.
+# Add OpenCV/ONNX Runtime only after model provenance and interfaces are verified.
