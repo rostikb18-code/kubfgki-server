@@ -13,6 +13,6 @@ Build configuration: JDK 17, Android SDK 35/build-tools 35.0.0, Gradle 8.10.2. T
 
 ## Honest implementation status
 
-This is currently a **native Android UI foundation**, not a finished autonomous gameplay bot. The current screen has brawler text search/selection for a starter subset, trophy inputs, and a queue saved on-device. It does **not** yet include the full 108 icon assets, working width/height overlay sliders, MediaProjection capture flow, Accessibility-based game control, ONNX Runtime, five verified trained models, live match perception, or autonomous match control. START intentionally reports that the gameplay controller is not connected.
+This is currently a **native Android UI foundation**, not a finished autonomous gameplay bot. The current screen has brawler text search/selection for a starter subset, trophy inputs, a queue saved on-device, separate width/height sliders, and a draggable floating AI bubble that requests overlay permission and can be started/paused/stopped. It does **not** yet include the full 108 icon assets, MediaProjection capture flow, Accessibility-based game control, ONNX Runtime, five verified trained models, live match perception, or autonomous match control. START intentionally reports that the gameplay controller is not connected.
 
 No APK should be considered built until GitHub Actions reports a successful run and provides the artifact. An Actions build verifies compilation and packaging, not gameplay on a physical phone; device installation and gameplay still require separate testing.
