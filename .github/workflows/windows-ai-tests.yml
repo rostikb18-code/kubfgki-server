@@ -1,0 +1,33 @@
+name: RostikAI Windows AI Core Tests
+
+on:
+  push:
+    branches: ["main", "master"]
+    paths:
+      - "windows-ai/**"
+      - ".github/workflows/windows-ai-tests.yml"
+  pull_request:
+    paths:
+      - "windows-ai/**"
+      - ".github/workflows/windows-ai-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile Python modules
+        run: python -m compileall -q windows-ai
+      - name: Run deterministic safety tests
+        working-directory: windows-ai
+        run: python -m unittest discover -s tests -v
