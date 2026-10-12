@@ -1,14 +1,10 @@
 # RostikAI Windows Emulator Prototype
 
-This folder is a separate Windows prototype for Android-emulator capture and platform-independent decision logic. It does not alter the existing Android app.
+This folder contains the first Windows integration path for the project. The native Android APK is still separate.
 
-## License gate
+## Option A — run the existing RostikAI test scaffold
 
-No third-party source or model weights have been copied into this prototype. See [THIRD_PARTY_AUDIT.md](THIRD_PARTY_AUDIT.md). PylaAI identifies CC BY-NC 4.0; Jooi025/BrawlStarsBot's LICENSE is MIT for code covered by that license. Model weights and other assets need their own provenance/license checks.
-
-## Setup
-
-Use Python 3.11 on Windows. From this directory:
+Use Python 3.11 on Windows:
 
 ```powershell
 py -3.11 -m venv .venv
@@ -17,19 +13,38 @@ python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
 ```
 
-## Read-only emulator screenshot smoke test
+Read-only ADB screenshot test:
 
 1. Start an Android emulator and open the game or home screen.
-2. Install Android SDK Platform Tools and make sure `adb.exe` is on PATH.
-3. In PowerShell, run `adb devices` and confirm the emulator shows as `device`.
-4. From `windows-ai`, run:
+2. Install Android SDK Platform Tools and ensure `adb.exe` is on PATH.
+3. Run `adb devices` and confirm the emulator is listed as `device`.
+4. Run `python capture_once.py --serial emulator-5554 --output captures/latest.png` (replace the serial with yours).
+
+This scaffold does not yet detect objects or send game inputs.
+
+## Option B — launch an existing community game-playing bot (Windows / BlueStacks)
+
+I added `run_upstream_bot.py`, which checks out a pinned revision of [Jooi025/BrawlStarsBot](https://github.com/Jooi025/BrawlStarsBot), verifies the repository MIT license notice, checks for its bundled OpenVINO model files, and can launch its own controller. It keeps that project isolated under `windows-ai/vendor/BrawlStarsBot` instead of silently mixing incompatible source into the Android app.
+
+Prerequisites: Windows, Git, Python 3.11, BlueStacks with Brawl Stars running, and enough disk/network capacity to install its dependencies. From this directory:
 
 ```powershell
-python capture_once.py --serial emulator-5554 --output captures/latest.png
+py -3.11 -m venv .venv-upstream
+.\.venv-upstream\Scripts\Activate.ps1
+python run_upstream_bot.py --setup-only
+python run_upstream_bot.py --install
 ```
 
-Replace `emulator-5554` with the serial shown by `adb devices`. If only one device is connected, omit `--serial`. Open the saved PNG to verify the capture is correct.
+After dependencies install, configure the upstream project's `constants.py` for your BlueStacks window and selected brawler, then launch with:
 
-## Current limits
+```powershell
+python run_upstream_bot.py
+```
 
-This milestone captures frames and tests safety rules, but it does not yet recognize enemies from pixels and does not send game inputs. No model files are bundled. A model must have documented provenance, a license, a tested ONNX input/output contract, and real-frame evaluation before it can be enabled. The deterministic decision core is a scaffold, not a trained or match-validated policy.
+**Important limitations and risk:** this upstream bot is designed for a visible BlueStacks desktop window, not generic ADB input and not the RostikAI Android APK. Its README documents known detection and gameplay limitations. It sends real mouse/keyboard input; use only in an environment/account where you accept the risk of lost trophies or enforcement. The bootstrap pins source code, but the existence check is not proof of model accuracy, compatibility with every emulator/resolution, or a separate license grant for every bundled asset. Stop immediately if detections or actions are wrong.
+
+## CI and tests
+
+Run `python -m unittest discover -s tests -v`. GitHub Actions runs the unit tests on Windows/Python 3.11. The tests validate the scaffold only; they do not validate gameplay.
+
+See [THIRD_PARTY_AUDIT.md](THIRD_PARTY_AUDIT.md) for the source/license decision.
