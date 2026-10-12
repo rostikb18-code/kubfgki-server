@@ -1,385 +1,101 @@
-name: RostikAI v31.1.3 - Build APK
+name: RostikAI Android APK
 
 on:
   workflow_dispatch:
   push:
     branches: ["**"]
+    paths:
+      - "android-native/**"
+      - ".github/workflows/build.yml"
+  pull_request:
+    paths:
+      - "android-native/**"
+      - ".github/workflows/build.yml"
 
 permissions:
   contents: read
 
-env:
-  ANDROID_PLATFORM: "35"
-  ANDROID_BUILD_TOOLS: "35.0.0"
-  GRADLE_VERSION: "8.10.2"
-  PART_PREFIX: "RostikAI-v31.1.3-MERGED-ANDROID-PROJECT-PART-"
-
 jobs:
   build:
-    name: Build APK
+    name: Build and verify native APK
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
-
+    timeout-minutes: 30
     steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-      # ============================================================
-      # 1. CHECKOUT
-      # ============================================================
-
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      # ============================================================
-      # 2. ASSEMBLE PROJECT FROM 5 ZIP PARTS
-      # ============================================================
-
-      - name: Assemble Android project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf .rostik_parts .rostik_assembled
-          mkdir -p .rostik_parts .rostik_assembled
-
-          for n in 01 02 03 04 05; do
-            FILE="${PART_PREFIX}${n}.zip"
-
-            if [ ! -f "$FILE" ]; then
-              echo "ERROR: missing $FILE"
-              exit 1
-            fi
-
-            unzip -tq "$FILE"
-            cp -f "$FILE" ".rostik_parts/$FILE"
-
-            echo "PART $n OK"
-          done
-
-          for n in 01 02 03 04 05; do
-            unzip -q \
-              ".rostik_parts/${PART_PREFIX}${n}.zip" \
-              -d .rostik_assembled
-          done
-
-          test -f .rostik_assembled/settings.gradle.kts
-          test -f .rostik_assembled/build.gradle.kts
-          test -f .rostik_assembled/app/build.gradle.kts
-
-          rm -rf app gradle
-
-          rm -f \
-            settings.gradle.kts \
-            build.gradle.kts \
-            gradle.properties \
-            gradlew \
-            gradlew.bat
-
-          cp -a .rostik_assembled/. ./
-
-          chmod +x gradlew
-
-          test -f settings.gradle.kts
-          test -f build.gradle.kts
-          test -f app/build.gradle.kts
-          test -f app/src/main/AndroidManifest.xml
-
-          # Apply the canonical UI source after extracting the ZIP parts.
-          # This prevents the archives from silently restoring the old overlay UI.
-          mapfile -t OVERLAY_SOURCES < <(find app/src/main/java -type f -name 'OverlayService.kt' -print)
-          if [ "${#OVERLAY_SOURCES[@]}" -ne 1 ]; then
-            echo "ERROR: expected exactly one OverlayService.kt in assembled Android source, found ${#OVERLAY_SOURCES[@]}"
-            printf '%s\n' "${OVERLAY_SOURCES[@]}"
-            exit 1
-          fi
-          test -s overrides/OverlayService.kt
-          cp -f overrides/OverlayService.kt "${OVERLAY_SOURCES[0]}"
-          cmp -s overrides/OverlayService.kt "${OVERLAY_SOURCES[0]}"
-          echo "CANONICAL OVERLAY SOURCE APPLIED: ${OVERLAY_SOURCES[0]}"
-
-          # Guard critical lifecycle behavior in the exact source that will compile.
-          python3 - overrides/OverlayService.kt <<'PY'
-          from pathlib import Path
-          import sys
-
-          source = Path(sys.argv[1]).read_text(encoding="utf-8")
-          checks = {
-              "STOP cancels delayed START": "pendingStartRunnable?.let(mainHandler::removeCallbacks)" in source,
-              "STOP clears delayed START reference": "pendingStartRunnable = null" in source,
-              "STOP terminates overlay service": "stopSelf()" in source,
-              "delayed START checks service/panel state": "if (panel == null || !expanded || BotRuntime.supervisor.isRunning()) return@Runnable" in source,
-              "delayed START is stored for cancellation": "pendingStartRunnable = startRunnable" in source,
-          }
-          failed = [name for name, ok in checks.items() if not ok]
-          for name, ok in checks.items():
-              print(("PASS: " if ok else "FAIL: ") + name)
-          if failed:
-              raise SystemExit("Lifecycle source verification failed: " + ", ".join(failed))
-          print("LIFECYCLE SOURCE CHECKS PASSED")
-          PY
-
-          echo "PROJECT ASSEMBLY OK"
-
-      # ============================================================
-      # 3. FIX KNOWN KOTLIN COMPILER ERROR
-      # ============================================================
-
-      - name: Fix duplicate activeReader
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FILE="app/src/main/java/com/rostik/touchbot/ScreenCaptureService.kt"
-
-          test -f "$FILE"
-
-          python3 - "$FILE" <<'PY'
-          from pathlib import Path
-          import re
-          import sys
-
-          path = Path(sys.argv[1])
-
-          lines = path.read_text(
-              encoding="utf-8"
-          ).splitlines(keepends=True)
-
-          pattern = re.compile(
-              r'^\s*val\s+activeReader\s*(?::[^=]+)?='
-          )
-
-          positions = [
-              i
-              for i, line in enumerate(lines)
-              if pattern.search(line)
-          ]
-
-          print(
-              "activeReader declarations:",
-              len(positions)
-          )
-
-          if len(positions) > 1:
-              # Удаляем только второе объявление.
-              del lines[positions[1]]
-
-              path.write_text(
-                  "".join(lines),
-                  encoding="utf-8"
-              )
-
-              print(
-                  "Removed duplicate activeReader declaration."
-              )
-
-          final_lines = path.read_text(
-              encoding="utf-8"
-          ).splitlines()
-
-          final_count = sum(
-              1
-              for line in final_lines
-              if pattern.search(line)
-          )
-
-          if final_count != 1:
-              raise SystemExit(
-                  "ERROR: activeReader must have exactly "
-                  f"one declaration, found {final_count}"
-              )
-
-          print("activeReader FIX OK")
-          PY
-
-      # ============================================================
-      # 4. JAVA
-      # ============================================================
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v6
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
 
-      # ============================================================
-      # 5. ANDROID SDK
-      # ============================================================
+      - name: Set up Android SDK 35
+        uses: android-actions/setup-android@v3
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-
-      - name: Install Android SDK 35
+      - name: Install Android platform and build tools
         shell: bash
         run: |
           set -euo pipefail
+          sdkmanager --version
+          yes | sdkmanager --licenses || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
 
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-${ANDROID_PLATFORM}" \
-            "build-tools;${ANDROID_BUILD_TOOLS}"
-
-      # ============================================================
-      # 6. GRADLE
-      # ============================================================
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6
+      - name: Set up Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: ${{ env.GRADLE_VERSION }}
+          gradle-version: "8.10.2"
 
-      # ============================================================
-      # 7. BUILD DEBUG APK
-      # ============================================================
+      - name: Validate native project
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f android-native/settings.gradle.kts
+          test -f android-native/build.gradle.kts
+          test -f android-native/gradle.properties
+          test -f android-native/app/build.gradle.kts
+          test -f android-native/app/src/main/AndroidManifest.xml
+          test -f android-native/app/src/main/java/com/rostik/ai/MainActivity.kt
+          grep -q 'applicationId = "com.rostik.ai"' android-native/app/build.gradle.kts
+          grep -q 'class MainActivity' android-native/app/src/main/java/com/rostik/ai/MainActivity.kt
+          echo "Preflight passed."
 
-      - name: Build Debug APK
+      - name: Build debug APK
+        working-directory: android-native
         shell: bash
         run: |
           set -o pipefail
+          gradle --no-daemon --no-configuration-cache --stacktrace --console=plain assembleDebug 2>&1 | tee build.log
 
-          gradle \
-            --no-daemon \
-            --no-configuration-cache \
-            --stacktrace \
-            --console=plain \
-            :app:assembleDebug \
-            2>&1 | tee build.log
-
-          STATUS=${PIPESTATUS[0]}
-
-          if [ "$STATUS" -ne 0 ]; then
-            echo ""
-            echo "=============================="
-            echo "DEBUG BUILD FAILED"
-            echo "=============================="
-            echo ""
-            tail -n 200 build.log
-            exit "$STATUS"
-          fi
-
-          echo "DEBUG BUILD SUCCESS"
-
-      # ============================================================
-      # 8. VERIFY APK EXISTS
-      # ============================================================
-
-      - name: Check Debug APK
+      - name: Verify APK package and checksum
         shell: bash
         run: |
           set -euo pipefail
-
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-
+          APK="android-native/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
-
           unzip -tq "$APK"
-
           echo "APK CREATED:"
           ls -lh "$APK"
+          sha256sum "$APK" | tee android-native/app/build/outputs/apk/debug/SHA256.txt
 
-      # ============================================================
-      # 9. UPLOAD DEBUG APK
-      # ============================================================
-
-      - name: Upload Debug APK
-        if: ${{ success() }}
-        uses: actions/upload-artifact@v7
+      - name: Upload installable debug APK
+        uses: actions/upload-artifact@v4
         with:
-          name: RostikAI-v31.1.3-Debug-APK
+          name: RostikAI-native-debug-apk
+          path: |
+            android-native/app/build/outputs/apk/debug/app-debug.apk
+            android-native/app/build/outputs/apk/debug/SHA256.txt
           if-no-files-found: error
-          retention-days: 30
-          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
 
-      # ============================================================
-      # 10. BUILD RELEASE APK
-      # ============================================================
-
-      - name: Build Release APK
-        shell: bash
-        run: |
-          set -o pipefail
-
-          gradle \
-            --no-daemon \
-            --no-configuration-cache \
-            --stacktrace \
-            --console=plain \
-            :app:assembleRelease \
-            2>&1 | tee release.log
-
-          STATUS=${PIPESTATUS[0]}
-
-          if [ "$STATUS" -ne 0 ]; then
-            echo ""
-            echo "=============================="
-            echo "RELEASE BUILD FAILED"
-            echo "=============================="
-            echo ""
-            tail -n 200 release.log
-            exit "$STATUS"
-          fi
-
-          echo "RELEASE BUILD SUCCESS"
-
-      # ============================================================
-      # 11. LOCATE AND STAGE RELEASE APK
-      # ============================================================
-
-      - name: Locate Release APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p artifacts/release
-
-          mapfile -t RELEASE_APKS < <(
-            find app/build/outputs/apk/release \
-              -type f -name '*.apk' -print 2>/dev/null | sort
-          )
-
-          if [ "${#RELEASE_APKS[@]}" -eq 0 ]; then
-            echo "::warning::Release task completed but no release APK file was found."
-            echo "Available APK outputs:"
-            find app/build/outputs -type f -name '*.apk' -print || true
-            exit 1
-          fi
-
-          SOURCE_APK="${RELEASE_APKS[0]}"
-          cp -f "$SOURCE_APK" artifacts/release/RostikAI-v31.1.3-Release.apk
-
-          echo "Release APK source: $SOURCE_APK"
-          ls -lh artifacts/release/RostikAI-v31.1.3-Release.apk
-
-          unzip -tq artifacts/release/RostikAI-v31.1.3-Release.apk
-          echo "RELEASE APK STAGED OK"
-
-      # ============================================================
-      # 12. UPLOAD RELEASE APK
-      # ============================================================
-
-      - name: Upload Release APK
-        if: ${{ success() }}
-        uses: actions/upload-artifact@v7
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
         with:
-          name: RostikAI-v31.1.3-Release-APK
-          if-no-files-found: error
-          retention-days: 30
-          path: artifacts/release/RostikAI-v31.1.3-Release.apk
-
-      # ============================================================
-      # 12. LOGS ONLY IF SOMETHING FAILED
-      # ============================================================
-
-      - name: Upload build logs
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: RostikAI-v31.1.3-Build-Logs
+          name: RostikAI-build-logs
+          path: |
+            android-native/build.log
+            android-native/app/build/reports/**
+            android-native/app/build/outputs/logs/**
           if-no-files-found: warn
           retention-days: 7
-          path: |
-            build.log
-            release.log
-            app/build/reports/**
-            app/build/outputs/logs/**
