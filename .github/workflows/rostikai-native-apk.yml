@@ -31,7 +31,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null
+          sdkmanager --version
+          yes | sdkmanager --licenses || true
           sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
 
       - name: Set up Gradle 8.10.2
@@ -54,7 +55,7 @@ jobs:
 
       - name: Build debug APK
         working-directory: android-native
-        run: gradle --no-daemon assembleDebug
+        run: gradle --no-daemon --stacktrace assembleDebug
 
       - name: Verify APK
         shell: bash
