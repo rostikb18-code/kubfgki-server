@@ -1,0 +1,90 @@
+name: Inspect external ONNX candidates (metadata only)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/inspect-onnx-candidates.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    name: Inspect upstream model tensor contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ONNX Runtime
+        run: python -m pip install --disable-pip-version-check onnxruntime
+
+      - name: Download candidates to temporary runner storage only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/onnx-candidates"
+          curl --fail --location --retry 3 --connect-timeout 15 --max-time 180 \
+            'https://raw.githubusercontent.com/AngelFireLA/BrawlStarsBotMaking/main/models/specific%20brawler%20detection/.onnx/PylaSpecificBrawlerDetectorV1.onnx' \
+            -o "$RUNNER_TEMP/onnx-candidates/brawler_detector.onnx"
+          curl --fail --location --retry 3 --connect-timeout 15 --max-time 180 \
+            'https://raw.githubusercontent.com/AngelFireLA/BrawlStarsBotMaking/main/models/wall%20detection/.onnx/PylaWallDetectorV2.onnx' \
+            -o "$RUNNER_TEMP/onnx-candidates/wall_detector.onnx"
+          curl --fail --location --retry 3 --connect-timeout 15 --max-time 180 \
+            'https://raw.githubusercontent.com/AngelFireLA/BrawlStarsBotMaking/main/models/entity%20detection/.onnx/PylaEntityDetectorV2.onnx' \
+            -o "$RUNNER_TEMP/onnx-candidates/entity_detector.onnx"
+          sha256sum "$RUNNER_TEMP"/onnx-candidates/*.onnx
+
+      - name: Inspect real input/output metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/onnx-candidates" <<'PY'
+          import json, pathlib, sys
+          import onnxruntime as ort
+
+          root = pathlib.Path(sys.argv[1])
+          report = []
+          for path in sorted(root.glob("*.onnx")):
+              session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+              def describe(nodes):
+                  return [{"name": n.name, "type": n.type, "shape": n.shape} for n in nodes]
+              report.append({
+                  "file": path.name,
+                  "size_bytes": path.stat().st_size,
+                  "sha256": __import__("hashlib").sha256(path.read_bytes()).hexdigest(),
+                  "inputs": describe(session.get_inputs()),
+                  "outputs": describe(session.get_outputs()),
+                  "provider": session.get_providers()
+              })
+          out = pathlib.Path("onnx-candidate-metadata.json")
+          out.write_text(json.dumps({
+              "purpose": "metadata inspection only; candidates are not bundled or approved for redistribution",
+              "models": report
+          }, indent=2) + "\n")
+          print(out.read_text())
+          if len(report) != 3:
+              raise SystemExit(f"Expected 3 candidates, inspected {len(report)}")
+          PY
+
+      - name: Upload metadata report (no model binaries)
+        uses: actions/upload-artifact@v4
+        with:
+          name: onnx-candidate-metadata
+          path: onnx-candidate-metadata.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Clarify limitations
+        if: always()
+        run: |
+          echo "This workflow does not copy model binaries into the repository or APK."
+          echo "Tensor metadata is not a license grant and is not proof of detection accuracy."
+          echo "Do not integrate these candidates into a release until redistribution rights and preprocessing/decoder contracts are verified."
