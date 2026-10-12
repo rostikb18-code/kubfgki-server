@@ -122,7 +122,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install numpy==1.26.4 onnx==1.16.1 onnxruntime==1.20.1
+          python -m pip install numpy==1.26.4 protobuf==4.25.5 onnx==1.16.1 onnxruntime==1.20.1
           python -m pip install torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cpu
           python -m pip install ultralytics==8.0.184 opencv-python==4.8.1.78 PyYAML==6.0.2 requests==2.32.3 scipy==1.13.1 pandas==2.2.3 matplotlib==3.9.2 psutil==6.1.0 py-cpuinfo==9.0.0 Pillow==10.4.0 tqdm==4.67.0 seaborn==0.13.2 thop==0.1.1.post2209072238 numpy==1.26.4 onnx==1.16.1 onnxruntime==1.20.1
           python android-native/scripts/prepare_brawler_detector.py
