@@ -4,6 +4,9 @@ import android.app.Activity
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
 import android.widget.*
@@ -26,6 +29,10 @@ class MainActivity : Activity() {
     private lateinit var currentTrophies: EditText
     private lateinit var targetTrophies: EditText
     private lateinit var queueView: LinearLayout
+    private lateinit var widthValue: TextView
+    private lateinit var heightValue: TextView
+    private lateinit var widthSlider: SeekBar
+    private lateinit var heightSlider: SeekBar
     private var selected = "Shelly"
     private val queue = linkedMapOf<String, Pair<Int, Int>>()
 
@@ -110,21 +117,85 @@ class MainActivity : Activity() {
         controlCard.addView(label("УПРАВЛЕНИЕ", 15, Color.WHITE, true))
         status = label("Состояние: готов к настройке", 13, Color.rgb(255, 205, 95), false)
         controlCard.addView(status)
+        val prefs = getSharedPreferences("rostikai", MODE_PRIVATE)
+        val savedWidth = prefs.getInt("overlay_width", 64).coerceIn(44, 120)
+        val savedHeight = prefs.getInt("overlay_height", 64).coerceIn(44, 120)
+        widthValue = label("Ширина кнопки AI: ${savedWidth} dp", 13, Color.LTGRAY, false)
+        controlCard.addView(widthValue)
+        widthSlider = SeekBar(this).apply {
+            max = 76
+            progress = savedWidth - 44
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    val value = progress + 44
+                    widthValue.text = "Ширина кнопки AI: ${value} dp"
+                    saveOverlaySize(value, heightSlider.progress + 44)
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+            })
+        }
+        controlCard.addView(widthSlider, LinearLayout.LayoutParams(-1, dp(42)))
+        heightValue = label("Высота кнопки AI: ${savedHeight} dp", 13, Color.LTGRAY, false)
+        controlCard.addView(heightValue)
+        heightSlider = SeekBar(this).apply {
+            max = 76
+            progress = savedHeight - 44
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    val value = progress + 44
+                    heightValue.text = "Высота кнопки AI: ${value} dp"
+                    saveOverlaySize(widthSlider.progress + 44, value)
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+            })
+        }
+        controlCard.addView(heightSlider, LinearLayout.LayoutParams(-1, dp(42)))
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         buttons.addView(actionButton("START", Color.rgb(46, 180, 117)) {
-            status.text = "AI не подключён — матч не запускается"
-            Toast.makeText(this@MainActivity, "Сначала требуется подключить экранное распознавание и игровой контроллер", Toast.LENGTH_LONG).show()
+            if (!Settings.canDrawOverlays(this)) {
+                status.text = "Разреши отображение поверх других приложений"
+                startActivityForResult(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")), 401)
+            } else {
+                startOverlay()
+            }
         }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(4); topMargin = dp(10) })
         buttons.addView(actionButton("PAUSE", Color.rgb(73, 103, 168)) {
-            status.text = "Состояние: AI не запущен"
+            startService(Intent(this, OverlayService::class.java).setAction(OverlayService.ACTION_PAUSE))
+            status.text = "Кнопка AI скрыта (пауза); игровой ИИ не подключён"
         }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(4); rightMargin = dp(4); topMargin = dp(10) })
         buttons.addView(actionButton("STOP", Color.rgb(191, 69, 82)) {
-            status.text = "Состояние: остановлено"
+            stopService(Intent(this, OverlayService::class.java))
+            status.text = "Состояние: кнопка AI остановлена"
         }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(4); topMargin = dp(10) })
         controlCard.addView(buttons)
-        controlCard.addView(label("Это новая основа приложения, не готовый автономный игровой бот. Распознавание экрана и управление матчем ещё не реализованы.", 12, Color.rgb(174,184,205), false))
+        controlCard.addView(label("Кнопка-пузырь и её размер работают. Автономное распознавание и управление матчем ещё не подключены.", 12, Color.rgb(174,184,205), false))
         content.addView(controlCard)
         setContentView(root)
+    }
+
+    private fun saveOverlaySize(width: Int, height: Int) {
+        getSharedPreferences("rostikai", MODE_PRIVATE).edit()
+            .putInt("overlay_width", width).putInt("overlay_height", height).apply()
+        if (Settings.canDrawOverlays(this)) {
+            startService(Intent(this, OverlayService::class.java).setAction(OverlayService.ACTION_RESIZE))
+        }
+    }
+
+    private fun startOverlay() {
+        startService(Intent(this, OverlayService::class.java).setAction(OverlayService.ACTION_START))
+        status.text = "Кнопка AI активна; игровой ИИ не подключён"
+        Toast.makeText(this, "Плавающая кнопка запущена. Автоматическая игра пока не подключена.", Toast.LENGTH_LONG).show()
+    }
+
+    @Deprecated("Deprecated in Android API; retained for compatibility with the current no-AndroidX build")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 401) {
+            if (Settings.canDrawOverlays(this)) startOverlay()
+            else status.text = "Разрешение на отображение поверх приложений не выдано"
+        }
     }
 
     private fun renderBrawlers(query: String) {
