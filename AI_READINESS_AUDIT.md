@@ -23,6 +23,15 @@ Scope: `android-native/` and the current feature branch. This is a source/build 
 7. **CI is not gameplay validation.** A successful `assembleDebug` only proves compilation and packaging. It does not prove the app opens on a phone, permissions behave on a specific Android version, or gameplay works.
 8. **Portrait counts are not proof of coverage.** Downloading a catalog during CI can fail or change over time; the current threshold allows partial icon coverage. Asset count alone does not validate that each portrait matches its brawler ID.
 
+## Latest CI evidence (2026-10-12)
+
+- APK build workflow: **success** on commit `cf0b16c3c7c6f1724b1c0b4b254b7a76e52a9214`.
+- Model acquisition workflow: **success**, but the HP OCR architecture source URL returned HTTP 404; no HP OCR ONNX export was performed.
+- APK catalog currently contains 107/109 roster entries and 107 portrait files. Vince and Cosmo portraits failed to download from all configured URLs; do not assume complete roster coverage.
+- The model acquisition workflow has one exported detector role. `hud_reader`, `terrain_segmenter`, `gas_segmenter`, and `tactical_policy` are still missing as validated trained ONNX models.
+- The detector's ONNX graph/CPU smoke test uses synthetic input. It does not measure precision/recall, Android-device latency, or real gameplay performance.
+- The successful APK build proves compilation and packaging only. It does not prove installation, permission flow, overlay behavior, or match control on a physical device.
+
 ## Safe improvements already made on this branch
 
 - Added an experimental perception/policy seam for future detector integration.
@@ -44,4 +53,4 @@ Scope: `android-native/` and the current feature branch. This is a source/build 
 
 ## Honest conclusion
 
-This branch is an Android capture/overlay/gesture foundation plus experimental color diagnostics. It is **not yet a complete or validated Brawl Stars AI**, does not reliably recognize all brawlers, and should not autonomously control matches. A compiled APK may be useful for testing the shell and permissions, but not as proof of functioning gameplay AI.
+This branch is an Android capture/overlay/gesture foundation with one bundled experimental detector and color-based diagnostics. It is **not yet a complete or validated Brawl Stars AI**: four model roles are still missing, the detector has not been validated on labeled gameplay, and reliable autonomous match control is not established. You can install the debug APK to test app startup, permissions, overlay, and capture on your own device; treat those as manual tests and do not expect the AI to play matches reliably.
