@@ -11,6 +11,7 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.text.InputType
 import android.view.Gravity
+import android.view.View
 import android.widget.*
 import android.graphics.drawable.GradientDrawable
 import org.json.JSONArray
