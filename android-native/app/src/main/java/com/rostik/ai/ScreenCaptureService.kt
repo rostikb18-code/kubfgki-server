@@ -43,6 +43,7 @@ class ScreenCaptureService : Service() {
     private var analysisThread: HandlerThread? = null
     private val gameAiPipeline = GameAiPipeline()
     private val gasDetector = GasDetector()
+    private var sceneDetector: SceneDetector? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -118,6 +119,8 @@ class ScreenCaptureService : Service() {
         val width = metrics.widthPixels.coerceAtLeast(1)
         val height = metrics.heightPixels.coerceAtLeast(1)
         val density = metrics.densityDpi
+        sceneDetector = try { SceneDetector(this).also { Log.i(TAG, "Trained ONNX scene detector loaded in OBSERVE-ONLY mode") } }
+            catch (e: Exception) { Log.e(TAG, "Trained scene detector unavailable; observe-only color diagnostics remain", e); null }
         val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
         imageReader = reader
         // Frame analysis is CPU work: keep it off the main looper to avoid freezing the UI.
@@ -133,13 +136,15 @@ class ScreenCaptureService : Service() {
                     val observation = gameAiPipeline.analyze(frame)
                     val proposal = gameAiPipeline.decide(observation)
                     val gas = gasDetector.inspect(frame, observation.player)
+                    val detections = sceneDetector?.detect(frame).orEmpty()
                     sampledFrames++
                     Log.i(TAG, "EXPERIMENTAL_VISION frame=$sampledFrames size=${frame.width}x${frame.height} " +
                         "left=${sample[0]} right=${sample[1]} centerRight=${sample[2]} " +
                         "greenCandidate=${observation.player} greenConfidence=${observation.playerConfidence} " +
                         "redCandidate=${observation.nearestThreat} redConfidence=${observation.threatConfidence} " +
                         "proposal=$proposal gasStatus=${gas.status} gasFraction=${gas.gasFraction} " +
-                        "gasSamples=${gas.sampledPixels} execution=DISABLED_NO_VERIFIED_DETECTOR")
+                        "gasSamples=${gas.sampledPixels} trainedDetections=${detections.take(8)} " +
+                        "execution=DISABLED_MODEL_NOT_GAMEPLAY_VALIDATED")
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Frame sampling failed; no actions sent", e)
@@ -219,6 +224,8 @@ class ScreenCaptureService : Service() {
         analysisThread = null
         try { projection?.stop() } catch (_: Exception) {}
         projection = null
+        try { sceneDetector?.close() } catch (_: Exception) {}
+        sceneDetector = null
     }
 
     override fun onDestroy() {
