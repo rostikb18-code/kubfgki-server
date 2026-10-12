@@ -100,6 +100,12 @@ class ScreenCaptureService : Service() {
         stopCapture()
         val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         projection = manager.getMediaProjection(resultCode, data)
+        // Android 14+ requires a registered callback before creating a VirtualDisplay.
+        projection?.registerCallback(object : MediaProjection.Callback() {
+            override fun onStop() {
+                stopSelf()
+            }
+        }, android.os.Handler(mainLooper))
         val metrics = DisplayMetrics()
         @Suppress("DEPRECATION")
         (getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay.getRealMetrics(metrics)
