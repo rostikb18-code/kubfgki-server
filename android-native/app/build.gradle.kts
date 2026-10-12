@@ -9,7 +9,7 @@ android {
 
     defaultConfig {
         applicationId = "com.rostik.ai"
-        minSdk = 26
+        minSdk = 24
         targetSdk = 35
         versionCode = 2
         versionName = "1.1.0"
