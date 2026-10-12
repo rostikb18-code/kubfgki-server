@@ -37,6 +37,8 @@ class ScreenCaptureService : Service() {
     private var projection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
+    private var lastSampleAt = 0L
+    private var sampledFrames = 0L
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -115,10 +117,22 @@ class ScreenCaptureService : Service() {
         val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
         imageReader = reader
         reader.setOnImageAvailableListener({ source ->
-            // Drain frames to keep the projection pipeline alive and avoid exhausting ImageReader buffers.
-            // A future vision module must consume/copy pixels here before closing the Image.
-            val frame = source.acquireLatestImage()
-            frame?.close()
+            val frame = source.acquireLatestImage() ?: return@setOnImageAvailableListener
+            try {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastSampleAt >= 1000L) {
+                    lastSampleAt = now
+                    val sample = sampleHudRegions(frame)
+                    sampledFrames++
+                    Log.i(TAG, "OBSERVE_ONLY frame=$sampledFrames size=${frame.width}x${frame.height} " +
+                        "left=${sample[0]} right=${sample[1]} centerRight=${sample[2]} " +
+                        "meaning=unclassified-no-automatic-actions")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Frame sampling failed; no actions sent", e)
+            } finally {
+                frame.close()
+            }
         }, android.os.Handler(mainLooper))
         virtualDisplay = projection?.createVirtualDisplay(
             "RostikAI-Capture",
@@ -132,6 +146,54 @@ class ScreenCaptureService : Service() {
         )
         if (virtualDisplay == null) throw IllegalStateException("VirtualDisplay creation failed")
         Log.i(TAG, "Screen capture started: ${width}x${height}; no game-state inference is connected")
+    }
+
+
+    /**
+     * Lightweight normalized-region color sampling for diagnostics only.
+     * Average colors do not identify attacks, super readiness, players, or movement.
+     */
+    private fun sampleHudRegions(frame: android.media.Image): List<String> {
+        val plane = frame.planes.firstOrNull() ?: return listOf("n/a", "n/a", "n/a")
+        val buffer = plane.buffer
+        val pixelStride = plane.pixelStride
+        val rowStride = plane.rowStride
+        val width = frame.width
+        val height = frame.height
+        fun average(xStart: Float, yStart: Float, xEnd: Float, yEnd: Float): String {
+            val x0 = (width * xStart).toInt().coerceIn(0, width - 1)
+            val x1 = (width * xEnd).toInt().coerceIn(x0 + 1, width)
+            val y0 = (height * yStart).toInt().coerceIn(0, height - 1)
+            val y1 = (height * yEnd).toInt().coerceIn(y0 + 1, height)
+            var red = 0L
+            var green = 0L
+            var blue = 0L
+            var count = 0L
+            val stepX = ((x1 - x0) / 8).coerceAtLeast(1)
+            val stepY = ((y1 - y0) / 8).coerceAtLeast(1)
+            var y = y0
+            while (y < y1) {
+                var x = x0
+                while (x < x1) {
+                    val offset = y * rowStride + x * pixelStride
+                    if (offset >= 0 && offset + 2 < buffer.limit()) {
+                        red += buffer.get(offset).toInt() and 0xff
+                        green += buffer.get(offset + 1).toInt() and 0xff
+                        blue += buffer.get(offset + 2).toInt() and 0xff
+                        count++
+                    }
+                    x += stepX
+                }
+                y += stepY
+            }
+            if (count == 0L) return "n/a"
+            return "%02x%02x%02x".format((red / count).toInt(), (green / count).toInt(), (blue / count).toInt())
+        }
+        return listOf(
+            average(0.03f, 0.70f, 0.32f, 0.98f),
+            average(0.70f, 0.70f, 0.98f, 0.98f),
+            average(0.52f, 0.70f, 0.82f, 0.96f)
+        )
     }
 
     private fun stopCapture() {
