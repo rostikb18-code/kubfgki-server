@@ -75,7 +75,7 @@ class GameAiPipelineTest {
 
     @Test
     fun doesNotAttackWithoutConfirmedLineOfSight() {
-        val enemy = GameAiPipeline.Threat(GameAiPipeline.Point(0.7f, 0.5f), 0.9f)
+        val enemy = GameAiPipeline.Threat(GameAiPipeline.Point(0.75f, 0.5f), 0.9f)
         val action = pipeline.decide(
             observation(threat = enemy, role = GameAiPipeline.CombatRole.LONG_RANGE, lineOfSight = null, ammo = 1f)
         )
