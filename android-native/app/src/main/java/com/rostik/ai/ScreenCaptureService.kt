@@ -24,8 +24,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * On-device MediaProjection capture foundation.
- * This service captures frames only; it does NOT recognize the game or control gameplay yet.
+ * On-device MediaProjection capture and YOLO perception.
+ * It logs detector results in observe-only mode and does not control gameplay.
  */
 class ScreenCaptureService : Service() {
     companion object {
@@ -94,7 +94,7 @@ class ScreenCaptureService : Service() {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
         }.setContentTitle("RostikAI")
-            .setContentText("Захват экрана активен; игровой анализ ещё не подключён")
+            .setContentText("Захват экрана активен; YOLO работает в режиме наблюдения")
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .setOngoing(true)
             .build()
@@ -196,7 +196,7 @@ class ScreenCaptureService : Service() {
             null
         )
         if (virtualDisplay == null) throw IllegalStateException("VirtualDisplay creation failed")
-        Log.i(TAG, "Screen capture started: ${width}x${height}; no game-state inference is connected")
+        Log.i(TAG, "Screen capture started: ${width}x${height}; YOLO observe-only; action policy is not connected")
     }
 
 
