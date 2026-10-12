@@ -117,8 +117,8 @@ jobs:
           set -euo pipefail
           python3 -m pip install --disable-pip-version-check ultralytics onnx onnxruntime
           mkdir -p android-native/app/src/main/assets/models
-          curl --fail --location --retry 3 --retry-delay 2 \\
-            "https://huggingface.co/datasets/BlackPymer2/BrawlStars-gameplay/resolve/main/best.pt" \\
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "https://huggingface.co/datasets/BlackPymer2/BrawlStars-gameplay/resolve/main/best.pt" \
             --output /tmp/rostikai-best.pt
           test -s /tmp/rostikai-best.pt
           python3 - <<'PY'
