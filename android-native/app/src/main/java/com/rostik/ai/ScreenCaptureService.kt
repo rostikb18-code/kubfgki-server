@@ -42,6 +42,7 @@ class ScreenCaptureService : Service() {
     private var sampledFrames = 0L
     private var analysisThread: HandlerThread? = null
     private val gameAiPipeline = GameAiPipeline()
+    private val gasDetector = GasDetector()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -131,12 +132,14 @@ class ScreenCaptureService : Service() {
                     val sample = sampleHudRegions(frame)
                     val observation = gameAiPipeline.analyze(frame)
                     val proposal = gameAiPipeline.decide(observation)
+                    val gas = gasDetector.inspect(frame, observation.player)
                     sampledFrames++
                     Log.i(TAG, "EXPERIMENTAL_VISION frame=$sampledFrames size=${frame.width}x${frame.height} " +
                         "left=${sample[0]} right=${sample[1]} centerRight=${sample[2]} " +
                         "greenCandidate=${observation.player} greenConfidence=${observation.playerConfidence} " +
                         "redCandidate=${observation.nearestThreat} redConfidence=${observation.threatConfidence} " +
-                        "proposal=$proposal execution=DISABLED_NO_VERIFIED_DETECTOR")
+                        "proposal=$proposal gasStatus=${gas.status} gasFraction=${gas.gasFraction} " +
+                        "gasSamples=${gas.sampledPixels} execution=DISABLED_NO_VERIFIED_DETECTOR")
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Frame sampling failed; no actions sent", e)
