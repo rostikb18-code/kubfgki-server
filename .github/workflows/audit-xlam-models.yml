@@ -1,0 +1,79 @@
+name: Audit xlamBOT model package
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/audit-xlam-models.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout RostikAI
+        uses: actions/checkout@v4
+
+      - name: Download and verify published xlamBOT runtime parts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p audit/xlamBOT/parts audit/report
+          cd audit/xlamBOT/parts
+
+          declare -a expected=(
+            "f0ab5813b9613da4a7b0b08e81d9eec25a95fa0dcb41e88ce41f397cf6a1e1dd  part-1.bin"
+            "68b2b40c8b77db4c9c1653f9bdc6f2bd8be9b6bb44b1549ab46fba39e3c41b11  part-2.bin"
+            "96a591f508a6a301d1e4bf55746a33e8a2496797d6a95b9d4cc761859e9800f3  part-3.bin"
+            "adebeca3508736e9883bf329fea9451dc08249bb8c91d6262b0720728c758d34  part-4.bin"
+            "6e654886f7b573a909c09e825a860acb043087ada7cdcc56a9bfbac5a6f27a50  part-5.bin"
+            "b0a6e7745bde009624a770c8a0b7754cbffa1a99408ff17dbdaf6696d54abb3f  part-6.bin"
+            "5d930ba3c255bebbdf8c83770fc21284db7335fd55b73261b1ad7b853379f3a9  part-7.bin"
+          )
+
+          for item in "${expected[@]}"; do
+            read -r sha file <<< "$item"
+            curl --fail --location --retry 3 --retry-delay 2 \
+              "https://raw.githubusercontent.com/Olegu621/xlamBOT/main/runtime/0.8.18/$file" \
+              --output "$file"
+            echo "$sha  $file" | sha256sum --check -
+          done
+
+          cat part-{1..7}.bin > ../xlam-full.zip
+          cd ..
+          test "$(stat -c %s xlam-full.zip)" -eq 341306554
+          echo "28c6367fa03edb564325cc52aa4759395576eb39a962b6eeec7ab42d3a3c8089  xlam-full.zip" | sha256sum --check -
+          unzip -t xlam-full.zip | tee ../report/xlam-zip-test.txt
+
+      - name: Extract package and inventory model files (never execute package code)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p audit/xlamBOT/extracted
+          unzip -q audit/xlamBOT/xlam-full.zip -d audit/xlamBOT/extracted
+          {
+            echo "# xlamBOT package audit"
+            echo
+            echo "- Source: https://github.com/Olegu621/xlamBOT"
+            echo "- Archive SHA-256: 28c6367fa03edb564325cc52aa4759395576eb39a962b6eeec7ab42d3a3c8089"
+            echo "- Archive integrity: passed if this report exists"
+            echo
+            echo "## Model and archive files"
+            find audit/xlamBOT/extracted -type f \( -iname '*.onnx' -o -iname '*.pt' -o -iname '*.pth' -o -iname '*.bin' -o -iname '*.safetensors' -o -iname '*.zip' -o -iname '*.xlambot' \) -printf '%P\t%s bytes\n' | sort
+            echo
+            echo "## SHA-256 for discovered model candidates"
+            find audit/xlamBOT/extracted -type f \( -iname '*.onnx' -o -iname '*.pt' -o -iname '*.pth' -o -iname '*.safetensors' \) -print0 | sort -z | xargs -0 -r sha256sum
+          } | tee audit/report/xlam-model-inventory.md
+
+      - name: Upload audit report and extracted model candidates
+        uses: actions/upload-artifact@v4
+        with:
+          name: xlamBOT-model-audit
+          path: |
+            audit/report/
+            audit/xlamBOT/extracted/
+          if-no-files-found: error
+          retention-days: 14
