@@ -24,10 +24,13 @@ internal class GameAiPipeline {
         val player: Point?,
         val nearestThreat: Point?,
         val playerConfidence: Float,
-        val threatConfidence: Float
+        val threatConfidence: Float,
+        // Null until a validated HUD-health decoder supplies a calibrated estimate [0..1].
+        val playerHealthFraction: Float? = null
     )
     sealed interface Action {
         data class Move(val dx: Float, val dy: Float, val durationMs: Long = 280L) : Action
+        data class Retreat(val dx: Float, val dy: Float, val durationMs: Long = 320L) : Action
         data object Attack : Action
         data object NoOp : Action
     }
@@ -85,12 +88,26 @@ internal class GameAiPipeline {
         val dx = enemy.x - player.x
         val dy = enemy.y - player.y
         val distance = kotlin.math.sqrt(dx * dx + dy * dy)
-        if (distance < 0.015f) return Action.Attack
-        val norm = kotlin.math.sqrt(dx * dx + dy * dy).coerceAtLeast(0.0001f)
+        val norm = distance.coerceAtLeast(0.0001f)
+
+        // Tactical rule is intentionally gated on real health input. The current color-only
+        // analyzer never sets playerHealthFraction, so it cannot pretend to know HP or retreat.
+        val health = observation.playerHealthFraction
+        if (health != null && health.isFinite() && health <= LOW_HEALTH_RETREAT_THRESHOLD) {
+            return Action.Retreat(
+                dx = (-dx / norm).coerceIn(-1f, 1f),
+                dy = (-dy / norm).coerceIn(-1f, 1f)
+            )
+        }
+
+        // No attack action based on distance alone: close screen centroids are not proof of
+        // a valid target, aim direction, line of sight, ammo, or attack range.
+        if (distance < 0.015f) return Action.NoOp
         return Action.Move((dx / norm).coerceIn(-1f, 1f), (dy / norm).coerceIn(-1f, 1f))
     }
 
     companion object {
+        private const val LOW_HEALTH_RETREAT_THRESHOLD = 0.30f
         private const val TAG = "RostikGameAI"
     }
 }
