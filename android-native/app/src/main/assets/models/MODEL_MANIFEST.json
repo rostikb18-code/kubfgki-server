@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "project": "RostikAI",
+  "status": "incomplete",
+  "policy": "Do not count a model as integrated until its real file, license/provenance, SHA-256, input/output tensors, labels, preprocessing, and CPU smoke test are recorded.",
+  "models": [
+    {
+      "id": "brawler_detector",
+      "purpose": "Detect brawlers and other relevant entities in captured game frames",
+      "file": null,
+      "status": "missing",
+      "license": null,
+      "source_url": null,
+      "sha256": null,
+      "input_spec": null,
+      "output_spec": null,
+      "labels_file": null
+    },
+    {
+      "id": "hud_ocr",
+      "purpose": "Read supported HUD text and numeric values such as health or trophies where visible",
+      "file": null,
+      "status": "missing",
+      "license": null,
+      "source_url": null,
+      "sha256": null,
+      "input_spec": null,
+      "output_spec": null,
+      "labels_file": null
+    },
+    {
+      "id": "environment_detector",
+      "purpose": "Identify arena boundaries, obstacles, hazards, and gas where applicable",
+      "file": null,
+      "status": "missing",
+      "license": null,
+      "source_url": null,
+      "sha256": null,
+      "input_spec": null,
+      "output_spec": null,
+      "labels_file": null
+    },
+    {
+      "id": "tactical_state",
+      "purpose": "Estimate gameplay state and relevant tactical features from validated perception outputs",
+      "file": null,
+      "status": "missing",
+      "license": null,
+      "source_url": null,
+      "sha256": null,
+      "input_spec": null,
+      "output_spec": null,
+      "labels_file": null
+    },
+    {
+      "id": "action_policy",
+      "purpose": "Choose safe, bounded movement and attack intents from validated state inputs",
+      "file": null,
+      "status": "missing",
+      "license": null,
+      "source_url": null,
+      "sha256": null,
+      "input_spec": null,
+      "output_spec": null,
+      "labels_file": null
+    }
+  ]
+}
