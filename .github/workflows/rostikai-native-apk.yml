@@ -6,6 +6,10 @@ on:
     paths:
       - "android-native/**"
       - ".github/workflows/rostikai-native-apk.yml"
+  pull_request:
+    paths:
+      - "android-native/**"
+      - ".github/workflows/rostikai-native-apk.yml"
 
 permissions:
   contents: read
