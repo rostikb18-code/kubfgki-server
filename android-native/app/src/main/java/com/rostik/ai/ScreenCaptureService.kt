@@ -7,6 +7,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -18,6 +20,8 @@ import android.os.IBinder
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * On-device MediaProjection capture foundation.
@@ -39,6 +43,10 @@ class ScreenCaptureService : Service() {
     private var imageReader: ImageReader? = null
     private var lastSampleAt = 0L
     private var sampledFrames = 0L
+    private var lastInferenceAt = 0L
+    private var detector: OnDeviceBrawlerDetector? = null
+    private val inferenceBusy = AtomicBoolean(false)
+    private val inferenceExecutor = Executors.newSingleThreadExecutor()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -100,6 +108,12 @@ class ScreenCaptureService : Service() {
 
     private fun startCapture(resultCode: Int, data: Intent) {
         stopCapture()
+        detector = try {
+            OnDeviceBrawlerDetector(this).also { Log.i(TAG, "Bundled YOLOv8 detector opened; inference is perception-only") }
+        } catch (e: Exception) {
+            Log.e(TAG, "Bundled detector unavailable; capture remains observe-only", e)
+            null
+        }
         val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         projection = manager.getMediaProjection(resultCode, data)
         // Android 14+ requires a registered callback before creating a VirtualDisplay.
@@ -120,16 +134,53 @@ class ScreenCaptureService : Service() {
             val frame = source.acquireLatestImage() ?: return@setOnImageAvailableListener
             try {
                 val now = android.os.SystemClock.elapsedRealtime()
-                if (now - lastSampleAt >= 1000L) {
+                val activeDetector = detector
+                if (activeDetector != null && now - lastInferenceAt >= 750L &&
+                    inferenceBusy.compareAndSet(false, true)) {
+                    lastInferenceAt = now
+                    val plane = frame.planes.firstOrNull()
+                    if (plane == null) {
+                        inferenceBusy.set(false)
+                    } else {
+                        val buffer = plane.buffer.duplicate()
+                        buffer.position(0)
+                        val raw = ByteArray(buffer.limit())
+                        buffer.get(raw)
+                        val width = frame.width
+                        val height = frame.height
+                        val rowStride = plane.rowStride
+                        val pixelStride = plane.pixelStride
+                        sampledFrames++
+                        inferenceExecutor.execute {
+                            var bitmap: Bitmap? = null
+                            try {
+                                bitmap = imageBytesToBitmap(raw, width, height, rowStride, pixelStride)
+                                val detections = activeDetector.detect(bitmap)
+                                val summary = detections.take(8).joinToString { d ->
+                                    "${d.label}=${"%.2f".format(java.util.Locale.US, d.confidence)}" +
+                                        "@${d.left.toInt()},${d.top.toInt()}-${d.right.toInt()},${d.bottom.toInt()}"
+                                }
+                                Log.i(TAG, "YOLO_OBSERVE frame=$sampledFrames size=${width}x${height} " +
+                                    "detections=${detections.size} [${summary}] actions=DISABLED")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "On-device detector failed; no actions sent", e)
+                            } finally {
+                                bitmap?.recycle()
+                                inferenceBusy.set(false)
+                            }
+                        }
+                    }
+                } else if (activeDetector == null && now - lastSampleAt >= 1000L) {
                     lastSampleAt = now
                     val sample = sampleHudRegions(frame)
                     sampledFrames++
                     Log.i(TAG, "OBSERVE_ONLY frame=$sampledFrames size=${frame.width}x${frame.height} " +
                         "left=${sample[0]} right=${sample[1]} centerRight=${sample[2]} " +
-                        "meaning=unclassified-no-automatic-actions")
+                        "meaning=no-compatible-detector-no-automatic-actions")
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Frame sampling failed; no actions sent", e)
+                inferenceBusy.set(false)
+                Log.w(TAG, "Frame processing failed; no actions sent", e)
             } finally {
                 frame.close()
             }
@@ -148,6 +199,31 @@ class ScreenCaptureService : Service() {
         Log.i(TAG, "Screen capture started: ${width}x${height}; no game-state inference is connected")
     }
 
+
+    private fun imageBytesToBitmap(
+        bytes: ByteArray,
+        width: Int,
+        height: Int,
+        rowStride: Int,
+        pixelStride: Int
+    ): Bitmap {
+        require(width > 0 && height > 0 && pixelStride >= 4) { "Unsupported ImageReader pixel layout" }
+        val pixels = IntArray(width * height)
+        for (y in 0 until height) {
+            val rowBase = y * rowStride
+            val outputBase = y * width
+            for (x in 0 until width) {
+                val offset = rowBase + x * pixelStride
+                if (offset + 3 >= bytes.size) continue
+                val red = bytes[offset].toInt() and 0xff
+                val green = bytes[offset + 1].toInt() and 0xff
+                val blue = bytes[offset + 2].toInt() and 0xff
+                val alpha = bytes[offset + 3].toInt() and 0xff
+                pixels[outputBase + x] = Color.argb(alpha, red, green, blue)
+            }
+        }
+        return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
+    }
 
     /**
      * Lightweight normalized-region color sampling for diagnostics only.
@@ -197,6 +273,8 @@ class ScreenCaptureService : Service() {
     }
 
     private fun stopCapture() {
+        try { detector?.close() } catch (e: Exception) { Log.w(TAG, "Error closing detector", e) }
+        detector = null
         try { virtualDisplay?.release() } catch (_: Exception) {}
         virtualDisplay = null
         try { imageReader?.setOnImageAvailableListener(null, null) } catch (_: Exception) {}
@@ -208,6 +286,7 @@ class ScreenCaptureService : Service() {
 
     override fun onDestroy() {
         stopCapture()
+        inferenceExecutor.shutdownNow()
         super.onDestroy()
     }
 
