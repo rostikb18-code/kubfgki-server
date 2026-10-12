@@ -70,7 +70,7 @@ class OverlayService : Service() {
                 val launch = packageManager.getLaunchIntentForPackage(packageName)
                 launch?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 if (launch != null) startActivity(launch)
-                Toast.makeText(this@OverlayService, "Игровой ИИ ещё не подключён", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@OverlayService, "Детектор встроен; анализ экрана доступен, автоматические игровые действия пока отключены.", Toast.LENGTH_SHORT).show()
             }
         }
         val lp = WindowManager.LayoutParams(
