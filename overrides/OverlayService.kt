@@ -414,14 +414,11 @@ class OverlayService : Service() {
             setPadding(dp(8), 0, 0, 0)
         }
 
-        // Fixed cards prevent the size controls from disappearing because of
-        // weight competition with the queue/editor. The right side is scrollable
-        // on compact displays, so Width/Height can never be clipped permanently.
-        // Keep the trophy editor directly below the queue so it is visible
-        // without having to discover that the right column is scrollable.
-        // Size controls remain available below it in the same scroll area.
-        right.addView(buildQueueCard(), LinearLayout.LayoutParams(-1, dp(160)))
-        right.addView(buildEditorCard(), LinearLayout.LayoutParams(-1, dp(250)).apply {
+        // Trophy editor is FIRST: on phone-sized overlays the right column is
+        // a scroll viewport, so placing the editor after the queue hid the fields.
+        // Keep queue and size controls below it; they remain vertically scrollable.
+        right.addView(buildEditorCard(), LinearLayout.LayoutParams(-1, dp(250)))
+        right.addView(buildQueueCard(), LinearLayout.LayoutParams(-1, dp(160)).apply {
             setMargins(0, dp(8), 0, 0)
         })
         right.addView(buildSizeCard(), LinearLayout.LayoutParams(-1, dp(150)).apply {
