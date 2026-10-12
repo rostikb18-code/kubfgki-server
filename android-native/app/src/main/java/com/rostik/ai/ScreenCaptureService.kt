@@ -39,6 +39,7 @@ class ScreenCaptureService : Service() {
     private var imageReader: ImageReader? = null
     private var lastSampleAt = 0L
     private var sampledFrames = 0L
+    private val gameAiPipeline = GameAiPipeline()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -120,13 +121,17 @@ class ScreenCaptureService : Service() {
             val frame = source.acquireLatestImage() ?: return@setOnImageAvailableListener
             try {
                 val now = android.os.SystemClock.elapsedRealtime()
-                if (now - lastSampleAt >= 1000L) {
+                if (now - lastSampleAt >= 500L) {
                     lastSampleAt = now
                     val sample = sampleHudRegions(frame)
+                    val observation = gameAiPipeline.analyze(frame)
+                    val proposal = gameAiPipeline.decide(observation)
                     sampledFrames++
-                    Log.i(TAG, "OBSERVE_ONLY frame=$sampledFrames size=${frame.width}x${frame.height} " +
+                    Log.i(TAG, "EXPERIMENTAL_VISION frame=$sampledFrames size=${frame.width}x${frame.height} " +
                         "left=${sample[0]} right=${sample[1]} centerRight=${sample[2]} " +
-                        "meaning=unclassified-no-automatic-actions")
+                        "greenCandidate=${observation.player} greenConfidence=${observation.playerConfidence} " +
+                        "redCandidate=${observation.nearestThreat} redConfidence=${observation.threatConfidence} " +
+                        "proposal=$proposal execution=DISABLED_NO_VERIFIED_DETECTOR")
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Frame sampling failed; no actions sent", e)
